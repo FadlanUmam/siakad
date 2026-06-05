@@ -159,6 +159,8 @@ class Nilai extends CI_Controller {
     }
 
     // Hapus data nilai
+    /*
+    // Fungsi Hapus Nilai dinonaktifkan demi keamanan data nilai mahasiswa
     public function hapus($id) {
         $nilai = $this->Siakad_model->get_nilai_by_id($id);
 
@@ -189,6 +191,7 @@ class Nilai extends CI_Controller {
 
         redirect('nilai');
     }
+    */
 
     // Sinkronisasi nilai huruf
     public function sync() {
