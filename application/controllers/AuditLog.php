@@ -34,6 +34,15 @@ class AuditLog extends CI_Controller {
     }
 
     /**
+     * Menghapus seluruh log riwayat aktivitas nilai jika ingin menghapus semua history.
+     */
+    public function clear() {
+        $this->db->truncate('nilai_log');
+        $this->session->set_flashdata('success', 'Seluruh riwayat perubahan nilai berhasil dihapus.');
+        redirect('auditlog');
+    }
+
+    /**
      * Menampilkan history perubahan untuk satu nilai tertentu.
      * Endpoint: /auditlog/detail/{nilai_id}
      */
