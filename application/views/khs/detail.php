@@ -7,7 +7,7 @@ $this->load->view('templates/header');
 <div class="d-sm-flex align-items-center justify-content-between mb-4">
 
     <h1 class="h3 mb-0 text-gray-800">
-        Detail Kartu Hasi l Studi (KHS)
+        Detail Kartu Hasil Studi (KHS)
     </h1>
 
     <!-- Tombol kembali sesuai role user -->
