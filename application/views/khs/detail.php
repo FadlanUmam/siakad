@@ -262,7 +262,7 @@ $this->load->view('templates/header');
                                         <!-- Nomor -->
                                         <td><?php echo $no++; ?></td>
 
-                                        <!-- Kode MK -->
+                                        <!-- Kode MataKuliah -->
                                         <td>
                                             <span class="badge badge-secondary">
                                                 <?php echo htmlspecialchars($khs['kode_mk']); ?>
