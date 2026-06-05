@@ -49,6 +49,13 @@ class Mahasiswa extends CI_Controller {
             $jurusan = $this->input->post('jurusan', TRUE);
             $foto    = 'default.jpg'; // nilai default jika tidak upload foto
 
+            // Cek apakah NIM sudah terdaftar kalo ada ya eror 
+            $existing_mhs = $this->Siakad_model->get_mahasiswa_by_nim($nim);
+            if ($existing_mhs) {
+                $this->session->set_flashdata('error', 'NIM ' . $nim . ' sudah terdaftar dalam sistem.');
+                redirect('mahasiswa/tambah');
+            }
+
             // Konfigurasi Upload File menggunakan Library CodeIgniter
             if (!empty($_FILES['foto']['name'])) {
                 // Tentukan lokasi penyimpanan file
@@ -134,6 +141,15 @@ class Mahasiswa extends CI_Controller {
             $nama    = $this->input->post('nama', TRUE);
             $jurusan = $this->input->post('jurusan', TRUE);
             $foto    = $data['mahasiswa']['foto']; // default ke foto yang sudah ada
+
+            // Cek apakah NIM sudah digunakan oleh mahasiswa lain
+            if ($nim !== $data['mahasiswa']['nim']) {
+                $existing_mhs = $this->Siakad_model->get_mahasiswa_by_nim($nim);
+                if ($existing_mhs) {
+                    $this->session->set_flashdata('error', 'NIM ' . $nim . ' sudah digunakan oleh mahasiswa lain.');
+                    redirect('mahasiswa/edit/' . $id);
+                }
+            }
 
             // Cek jika user mengunggah foto baru
             if (!empty($_FILES['foto']['name'])) {
