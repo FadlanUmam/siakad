@@ -6,7 +6,7 @@ $this->load->view('templates/header');
 <!-- Judul Halaman -->
 <div class="d-sm-flex align-items-center justify-content-between mb-4">
     <h1 class="h3 mb-0 text-gray-800">
-        Cetak Kartu Hasil Studi (KHS)
+        Cetak Kartu Hasil St udi (KHS)
     </h1>
 </div>
 
