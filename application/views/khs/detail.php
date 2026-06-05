@@ -250,7 +250,7 @@ $this->load->view('templates/header');
 
                         <tbody>
 
-                            <!-- Jika data nilai tersedia -->
+                            <!-- Jika data nilai ini tersedia -->
                             <?php if (!empty($khs_list)) : ?>
 
                                 <?php $no = 1; ?>
@@ -384,7 +384,7 @@ $this->load->view('templates/header');
                 <hr>
 
                 
-                <!-- TOMBOL CETAK KHS -->
+                <!-- ini TOMBOL CETAK KHS -->
                 
                 <?php if (!empty($khs_list) && !empty($selected_semester)) : ?>
 
