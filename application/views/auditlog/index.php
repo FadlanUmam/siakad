@@ -5,7 +5,22 @@
     <h1 class="h3 mb-0 text-gray-800">
         <i class="fas fa-history mr-2"></i>History Perubahan Nilai
     </h1>
+    <!-- Tombol Hapus Semua Riwayat -->
+    <a href="<?php echo base_url('auditlog/clear'); ?>" class="btn btn-sm btn-danger shadow-sm" 
+       onclick="return confirm('Apakah Anda yakin ingin menghapus SELURUH riwayat log perubahan nilai? Tindakan ini tidak dapat dibatalkan.')">
+        <i class="fas fa-trash-alt fa-sm text-white-50"></i> Hapus Semua Riwayat
+    </a>
 </div>
+
+<!-- Alert Notifikasi Flashdata -->
+<?php if ($this->session->flashdata('success')) : ?>
+    <div class="alert alert-success alert-dismissible fade show" role="alert">
+        <strong>Sukses!</strong> <?php echo $this->session->flashdata('success'); ?>
+        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+            <span aria-hidden="true">&times;</span>
+        </button>
+    </div>
+<?php endif; ?>
 
 <!-- Info Alert -->
 <div class="alert alert-info border-left-info">
