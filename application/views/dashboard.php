@@ -1,6 +1,6 @@
 <?php $this->load->view('templates/header'); ?>
 
-<!-- Alert Notifikasi -->
+<!-- Alert Notification -->
 <?php if ($this->session->flashdata('success')) : ?>
     <div class="alert alert-success alert-dismissible fade show" role="alert">
         <i class="fas fa-check-circle mr-2"></i>
