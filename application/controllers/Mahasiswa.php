@@ -66,7 +66,7 @@ class Mahasiswa extends CI_Controller {
 
                 // Lakukan proses upload file
                 if ($this->upload->do_upload('foto')) {
-                    // Jika berhasil, dapatkan info file yang diupload
+                    // Jika berhasil, dapatkan info file yang di upload
                     $uploadData = $this->upload->data();
                     $foto = $uploadData['file_name'];
                 } else {
