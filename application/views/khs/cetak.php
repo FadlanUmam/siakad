@@ -5,7 +5,7 @@
     <meta charset="utf-8">
 
     <!-- Judul halaman browser -->
-    <title>Cetak KHS - <?php echo htmlspecialchars($mahasiswa['nim']); ?></title>
+    <title>Cetak K HS - <?php echo htmlspecialchars($mahasiswa['nim']); ?></title>
 
     <!-- Memanggil CSS SB Admin -->
     <link href="<?php echo base_url('assets/start/css/sb-admin-2.min.css'); ?>" rel="stylesheet">
