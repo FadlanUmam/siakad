@@ -1,0 +1,67 @@
+<?php $this->load->view('templates/header'); ?>
+
+<!-- Page Heading -->
+<div class="d-sm-flex align-items-center justify-content-between mb-4">
+    <h1 class="h3 mb-0 text-gray-800">Tambah Mahasiswa</h1>
+    <a href="<?php echo base_url('mahasiswa'); ?>" class="btn btn-sm btn-secondary shadow-sm">
+        <i class="fas fa-arrow-left fa-sm text-white-50"></i> Kembali
+    </a>
+</div>
+
+<div class="row">
+    <div class="col-lg-8 col-md-10 col-12">
+        <div class="card shadow mb-4">
+            <div class="card-header py-3">
+                <h6 class="m-0 font-weight-bold text-primary">Formulir Pendaftaran Mahasiswa</h6>
+            </div>
+            <div class="card-body">
+                <?php echo form_open_multipart('mahasiswa/tambah'); ?>
+                
+                    <div class="form-group">
+                        <label for="nim" class="font-weight-bold">Nomor Induk Mahasiswa (NIM)</label>
+                        <input type="text" class="form-control" id="nim" name="nim" placeholder="Contoh: 220101001" required>
+                        <small class="form-text text-muted">NIM harus unik dan tidak boleh sama dengan mahasiswa lain.</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="nama" class="font-weight-bold">Nama Lengkap</label>
+                        <input type="text" class="form-control" id="nama" name="nama" placeholder="Masukkan nama lengkap" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="jurusan" class="font-weight-bold">Jurusan / Program Studi</label>
+                        <select class="form-control" id="jurusan" name="jurusan" required>
+                            <option value="">-- Pilih Jurusan --</option>
+                            <option value="Teknik Informatika">Teknik Informatika</option>
+                            <option value="Sistem Informasi">Sistem Informasi</option>
+                            <option value="Rekayasa Perangkat Lunak">Rekayasa Perangkat Lunak</option>
+                            <option value="Teknik Komputer">Teknik Komputer</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="foto" class="font-weight-bold">Foto Profil</label>
+                        <input type="file" class="form-control-file" id="foto" name="foto">
+                        <small class="form-text text-muted">Format file yang diperbolehkan: JPG, JPEG, PNG, GIF. Maksimal 2MB.</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="password" class="font-weight-bold">Password Login (Opsional)</label>
+                        <input type="password" class="form-control" id="password" name="password" placeholder="Password untuk akun login mahasiswa" minlength="4">
+                        <small class="form-text text-muted">Biarkan kosong jika ingin menggunakan password default: <strong>mahasiswa123</strong>.</small>
+                    </div>
+
+                    <hr>
+
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Simpan Data
+                    </button>
+                    <a href="<?php echo base_url('mahasiswa'); ?>" class="btn btn-light">Batal</a>
+
+                <?php echo form_close(); ?>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php $this->load->view('templates/footer'); ?>

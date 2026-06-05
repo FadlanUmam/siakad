@@ -1,0 +1,1761 @@
+﻿diff --git a/application/controllers/AuditLog.php b/application/controllers/AuditLog.php
+index 22b154f..1d9dea9 100644
+--- a/application/controllers/AuditLog.php
++++ b/application/controllers/AuditLog.php
+@@ -19,6 +19,12 @@ class AuditLog extends CI_Controller {
+         if (!$this->session->userdata('is_logged_in')) {
+             redirect('login');
+         }
++
++        // BACKEND: Role Guard - hanya admin/superadmin yang boleh akses
++        if ($this->session->userdata('role') === 'mahasiswa') {
++            $this->session->set_flashdata('error', 'Akses ditolak! Mahasiswa tidak diizinkan melihat log perubahan nilai.');
++            redirect('welcome');
++        }
+     }
+ 
+     /**
+diff --git a/application/controllers/Khs.php b/application/controllers/Khs.php
+index 9ec6eb5..d363f2e 100644
+--- a/application/controllers/Khs.php
++++ b/application/controllers/Khs.php
+@@ -19,6 +19,17 @@ class Khs extends CI_Controller {
+ 
+     // Menampilkan daftar mahasiswa yang dapat dipilih untuk melihat KHS
+     public function index() {
++        // BACKEND: Jika role adalah mahasiswa, langsung redirect ke detail KHS miliknya sendiri
++        if ($this->session->userdata('role') === 'mahasiswa') {
++            $nim = $this->session->userdata('username');
++            $mhs = $this->Siakad_model->get_mahasiswa_by_nim($nim);
++            if ($mhs) {
++                redirect('khs/detail/' . $mhs['id']);
++            } else {
++                $this->session->set_flashdata('error', 'Data profil mahasiswa Anda tidak ditemukan.');
++                redirect('welcome');
++            }
++        }
+ 
+         // Mengambil seluruh data mahasiswa dari model
+         $data['mahasiswa'] = $this->Siakad_model->get_all_mahasiswa();
+@@ -29,6 +40,15 @@ class Khs extends CI_Controller {
+ 
+     // Menampilkan detail KHS berdasarkan mahasiswa yang dipilih
+     public function detail($mahasiswa_id) {
++        // BACKEND: Proteksi agar mahasiswa tidak bisa mengubah ID di URL untuk melihat KHS orang lain
++        if ($this->session->userdata('role') === 'mahasiswa') {
++            $nim = $this->session->userdata('username');
++            $mhs = $this->Siakad_model->get_mahasiswa_by_nim($nim);
++            if (!$mhs || $mhs['id'] != $mahasiswa_id) {
++                $this->session->set_flashdata('error', 'Akses ditolak! Anda hanya dapat melihat KHS Anda sendiri.');
++                redirect('khs/detail/' . ($mhs ? $mhs['id'] : ''));
++            }
++        }
+ 
+         // Mengambil data mahasiswa berdasarkan ID
+         $data['mahasiswa'] = $this->Siakad_model->get_mahasiswa_by_id($mahasiswa_id);
+@@ -168,6 +188,15 @@ class Khs extends CI_Controller {
+ 
+     // Menampilkan halaman cetak KHS (print friendly)
+     public function cetak($mahasiswa_id, $semester) {
++        // BACKEND: Proteksi agar mahasiswa tidak bisa mengubah ID di URL untuk mencetak KHS orang lain
++        if ($this->session->userdata('role') === 'mahasiswa') {
++            $nim = $this->session->userdata('username');
++            $mhs = $this->Siakad_model->get_mahasiswa_by_nim($nim);
++            if (!$mhs || $mhs['id'] != $mahasiswa_id) {
++                $this->session->set_flashdata('error', 'Akses ditolak! Anda hanya dapat mencetak KHS Anda sendiri.');
++                redirect('khs/detail/' . ($mhs ? $mhs['id'] : ''));
++            }
++        }
+ 
+         // Mengambil data mahasiswa
+         $data['mahasiswa'] = $this->Siakad_model->get_mahasiswa_by_id($mahasiswa_id);
+@@ -221,12 +250,83 @@ class Khs extends CI_Controller {
+         }
+ 
+         // Menghitung IPK kumulatif
+-        // (sama seperti fungsi detail)
++        $all_nilai = $this->db->select('nilai.nilai_huruf, matakuliah.sks')
++                              ->from('nilai')
++                              ->join('matakuliah', 'nilai.matakuliah_id = matakuliah.id')
++                              ->where('nilai.mahasiswa_id', $mahasiswa_id)
++                              ->get()->result_array();
++
++        $total_bobot_sks_kumulatif = 0;
++        $total_sks_kumulatif = 0;
++
++        foreach ($all_nilai as $nilai_item) {
++            $bobot = $this->_konversi_huruf_ke_bobot($nilai_item['nilai_huruf']);
++            $sks = (int) $nilai_item['sks'];
++            $total_bobot_sks_kumulatif += ($sks * $bobot);
++            $total_sks_kumulatif += $sks;
++        }
++
++        $data['total_sks_kumulatif'] = $total_sks_kumulatif;
++        $data['ipk'] = ($total_sks_kumulatif > 0)
++            ? number_format($total_bobot_sks_kumulatif / $total_sks_kumulatif, 2)
++            : '0.00';
+ 
+         // Menampilkan halaman cetak
+         $this->load->view('khs/cetak', $data);
+     }
+ 
++    // Memperbarui foto profil mahasiswa (khusus mahasiswa login)
++    public function upload_foto() {
++        // Hanya boleh diakses oleh role mahasiswa
++        if ($this->session->userdata('role') !== 'mahasiswa') {
++            $this->session->set_flashdata('error', 'Akses ditolak!');
++            redirect('welcome');
++        }
++
++        $nim = $this->session->userdata('username');
++        $mhs = $this->Siakad_model->get_mahasiswa_by_nim($nim);
++
++        if (!$mhs) {
++            $this->session->set_flashdata('error', 'Data mahasiswa tidak ditemukan.');
++            redirect('welcome');
++        }
++
++        if (!empty($_FILES['foto']['name'])) {
++            $config['upload_path']   = './uploads/mahasiswa/';
++            $config['allowed_types'] = 'gif|jpg|png|jpeg';
++            $config['max_size']      = 2048; // Max 2MB
++            $config['file_name']     = 'mhs_' . $mhs['nim'] . '_' . time();
++
++            // Pastikan folder upload ada
++            if (!is_dir($config['upload_path'])) {
++                mkdir($config['upload_path'], 0777, TRUE);
++            }
++
++            $this->load->library('upload', $config);
++
++            if ($this->upload->do_upload('foto')) {
++                // Hapus foto lama jika bukan foto default
++                if ($mhs['foto'] != 'default.jpg' && file_exists('./uploads/mahasiswa/' . $mhs['foto'])) {
++                    unlink('./uploads/mahasiswa/' . $mhs['foto']);
++                }
++
++                $uploadData = $this->upload->data();
++                $newFoto = $uploadData['file_name'];
++
++                // Update database
++                $this->Siakad_model->update_mahasiswa($mhs['id'], ['foto' => $newFoto]);
++
++                $this->session->set_flashdata('success', 'Foto profil berhasil diperbarui.');
++            } else {
++                $this->session->set_flashdata('error', $this->upload->display_errors());
++            }
++        } else {
++            $this->session->set_flashdata('error', 'Pilih file foto terlebih dahulu!');
++        }
++
++        redirect('khs/detail/' . $mhs['id']);
++    }
++
+     // Fungsi private untuk mengubah nilai huruf menjadi bobot
+     private function _konversi_huruf_ke_bobot($huruf) {
+ 
+diff --git a/application/controllers/Mahasiswa.php b/application/controllers/Mahasiswa.php
+index 5946503..d5f7948 100644
+--- a/application/controllers/Mahasiswa.php
++++ b/application/controllers/Mahasiswa.php
+@@ -20,6 +20,12 @@ class Mahasiswa extends CI_Controller {
+         if (!$this->session->userdata('is_logged_in')) {
+             redirect('login');
+         }
++
++        // BACKEND: Role Guard - hanya admin/superadmin yang boleh akses
++        if ($this->session->userdata('role') === 'mahasiswa') {
++            $this->session->set_flashdata('error', 'Akses ditolak! Mahasiswa tidak diizinkan mengelola data mahasiswa.');
++            redirect('welcome');
++        }
+     }
+ 
+     /**
+@@ -85,7 +91,20 @@ class Mahasiswa extends CI_Controller {
+ 
+             // Panggil model untuk insert data ke database
+             if ($this->Siakad_model->insert_mahasiswa($saveData)) {
+-                $this->session->set_flashdata('success', 'Data Mahasiswa berhasil ditambahkan.');
++                // Tambahkan akun login di tabel users
++                $this->load->model('Auth_model');
++                $password = $this->input->post('password', TRUE);
++                if (empty($password)) {
++                    $password = 'mahasiswa123';
++                }
++                $this->Auth_model->insert_user([
++                    'username'     => $nim,
++                    'password'     => $password,
++                    'nama_lengkap' => $nama,
++                    'role'         => 'mahasiswa'
++                ]);
++
++                $this->session->set_flashdata('success', 'Data Mahasiswa dan akun login berhasil ditambahkan.');
+             } else {
+                 $this->session->set_flashdata('error', 'Gagal menambahkan data mahasiswa.');
+             }
+@@ -159,7 +178,33 @@ class Mahasiswa extends CI_Controller {
+ 
+             // Panggil model untuk memperbarui database
+             if ($this->Siakad_model->update_mahasiswa($id, $updateData)) {
+-                $this->session->set_flashdata('success', 'Data Mahasiswa berhasil diperbarui.');
++                // Update atau buat akun login di tabel users
++                $this->load->model('Auth_model');
++                $old_nim = $data['mahasiswa']['nim'];
++                $existing_user = $this->Auth_model->get_user_by_username($old_nim);
++                
++                $userData = [
++                    'username'     => $nim,
++                    'nama_lengkap' => $nama,
++                    'role'         => 'mahasiswa'
++                ];
++                
++                $new_password = $this->input->post('password', TRUE);
++                if (!empty($new_password)) {
++                    $userData['password'] = $new_password;
++                }
++
++                if ($existing_user) {
++                    $this->Auth_model->update_user($existing_user['id'], $userData);
++                } else {
++                    // Jika akun user belum ada, buat baru
++                    if (empty($userData['password'])) {
++                        $userData['password'] = 'mahasiswa123'; // Default password
++                    }
++                    $this->Auth_model->insert_user($userData);
++                }
++
++                $this->session->set_flashdata('success', 'Data Mahasiswa dan akun login berhasil diperbarui.');
+             } else {
+                 $this->session->set_flashdata('error', 'Gagal memperbarui data.');
+             }
+@@ -187,7 +232,14 @@ class Mahasiswa extends CI_Controller {
+ 
+             // Panggil model untuk menghapus row di database
+             if ($this->Siakad_model->delete_mahasiswa($id)) {
+-                $this->session->set_flashdata('success', 'Data Mahasiswa berhasil dihapus.');
++                // Hapus akun login di tabel users
++                $this->load->model('Auth_model');
++                $existing_user = $this->Auth_model->get_user_by_username($mahasiswa['nim']);
++                if ($existing_user) {
++                    $this->Auth_model->delete_user($existing_user['id']);
++                }
++
++                $this->session->set_flashdata('success', 'Data Mahasiswa dan akun login berhasil dihapus.');
+             } else {
+                 $this->session->set_flashdata('error', 'Gagal menghapus data.');
+             }
+diff --git a/application/controllers/Matakuliah.php b/application/controllers/Matakuliah.php
+index 3a5f5a6..25df036 100644
+--- a/application/controllers/Matakuliah.php
++++ b/application/controllers/Matakuliah.php
+@@ -19,6 +19,12 @@ class Matakuliah extends CI_Controller {
+         if (!$this->session->userdata('is_logged_in')) {
+             redirect('login');
+         }
++
++        // BACKEND: Role Guard - hanya admin/superadmin yang boleh akses
++        if ($this->session->userdata('role') === 'mahasiswa') {
++            $this->session->set_flashdata('error', 'Akses ditolak! Mahasiswa tidak diizinkan mengelola data mata kuliah.');
++            redirect('welcome');
++        }
+     }
+ 
+     /**
+diff --git a/application/controllers/Nilai.php b/application/controllers/Nilai.php
+index 4565d12..93ce857 100644
+--- a/application/controllers/Nilai.php
++++ b/application/controllers/Nilai.php
+@@ -1,46 +1,76 @@
+ <?php
+ defined('BASEPATH') OR exit('No direct script access allowed');
+ 
++/**
++ * Controller Nilai
++ * Mengelola data nilai akhir mahasiswa (KHS) dan mencatat setiap riwayat perubahan (Log) oleh admin.
++ */
+ class Nilai extends CI_Controller {
+ 
++    /**
++     * Constructor / Fungsi Inisialisasi
++     * Berjalan otomatis saat controller ini diakses. Berfungsi memuat model-model
++     * dan menerapkan proteksi keamanan sistem (Role Guard).
++     */
+     public function __construct() {
+         parent::__construct();
++        // Memuat model Siakad_model untuk interaksi data akademik (mahasiswa, matakuliah, nilai)
+         $this->load->model('Siakad_model');
++        // Memuat model Auth_model untuk interaksi data user & pencatatan log aktivitas
+         $this->load->model('Auth_model');
+ 
+-        // Cek login
++        // Proteksi 1: Cek apakah user sudah login. Jika belum, lempar ke halaman login.
+         if (!$this->session->userdata('is_logged_in')) {
+             redirect('login');
+         }
++
++        // Proteksi 2: Role Guard. Mahasiswa tidak boleh mengelola nilai.
++        // Jika yang login adalah mahasiswa, akses ditolak dan diarahkan ke Dashboard.
++        if ($this->session->userdata('role') === 'mahasiswa') {
++            $this->session->set_flashdata('error', 'Akses ditolak! Mahasiswa tidak diizinkan mengelola data nilai.');
++            redirect('welcome');
++        }
+     }
+ 
+-    // Menampilkan daftar nilai
++    /**
++     * Halaman Utama Manajemen Nilai (Index)
++     * Mengambil seluruh data nilai dari database dan menampilkannya dalam tabel.
++     */
+     public function index() {
++        // Mengambil semua data nilai (join mahasiswa & matakuliah) dari model
+         $data['nilai'] = $this->Siakad_model->get_all_nilai();
++        // Memuat halaman view nilai/index dengan membawa data nilai yang diambil
+         $this->load->view('nilai/index', $data);
+     }
+ 
+-    // Menambah data nilai baru
++    /**
++     * Tambah Nilai Baru (Tambah)
++     * Menangani proses input nilai mahasiswa secara manual dengan pengecekan ganda & log.
++     */
+     public function tambah() {
++        // Jika ada request submit form (POST)
+         if ($this->input->post()) {
++            // Menangkap input dari form
+             $mahasiswa_id  = $this->input->post('mahasiswa_id', TRUE);
+             $matakuliah_id = $this->input->post('matakuliah_id', TRUE);
+             $nilai_angka   = $this->input->post('nilai_angka', TRUE);
+ 
+-            // Cek duplikasi input nilai
++            // Validasi: Cek apakah nilai mahasiswa untuk mata kuliah tersebut sudah pernah diinput
+             $existing = $this->db->get_where('nilai', [
+                 'mahasiswa_id' => $mahasiswa_id,
+                 'matakuliah_id' => $matakuliah_id
+             ])->row_array();
+ 
++            // Jika sudah ada data nilai yang sama, tolak penginputan untuk menghindari duplikasi
+             if ($existing) {
+                 $this->session->set_flashdata('error', 'Nilai mahasiswa pada mata kuliah ini sudah pernah diinputkan! Silakan edit data nilai yang sudah ada.');
+                 redirect('nilai/tambah');
+             }
+ 
+-            // Hitung nilai huruf secara otomatis
++            // Hitung nilai huruf secara otomatis berdasarkan rumus konversi di controller ini
+             $nilai_huruf = $this->_hitung_nilai_huruf($nilai_angka);
+ 
++            // Menyiapkan data array untuk disimpan ke database
+             $saveData = [
+                 'mahasiswa_id'  => $mahasiswa_id,
+                 'matakuliah_id' => $matakuliah_id,
+@@ -48,16 +78,18 @@ class Nilai extends CI_Controller {
+                 'nilai_huruf'   => $nilai_huruf
+             ];
+ 
++            // Menyimpan ke tabel nilai melalui model
+             if ($this->Siakad_model->insert_nilai($saveData)) {
+-                $nilai_id = $this->db->insert_id();
++                $nilai_id = $this->db->insert_id(); // Mengambil ID dari record nilai baru
+ 
+-                // Catat log aktivitas admin
++                // Mengambil nama mahasiswa dan mata kuliah untuk dicatat di Log
+                 $mahasiswa = $this->Siakad_model->get_mahasiswa_by_id($mahasiswa_id);
+                 $matakuliah = $this->Siakad_model->get_matakuliah_by_id($matakuliah_id);
+ 
++                // AUDIT LOG: Catat aktivitas input nilai ini ke tabel nilai_log
+                 $this->Auth_model->insert_nilai_log([
+                     'nilai_id'          => $nilai_id,
+-                    'user_id'           => $this->session->userdata('user_id'),
++                    'user_id'           => $this->session->userdata('user_id'), // ID Admin/Superadmin yang menginput
+                     'aksi'              => 'insert',
+                     'nilai_angka_lama'  => NULL,
+                     'nilai_huruf_lama'  => NULL,
+@@ -73,32 +105,42 @@ class Nilai extends CI_Controller {
+                 $this->session->set_flashdata('error', 'Gagal menambahkan data nilai.');
+             }
+ 
++            // Redirect kembali ke list nilai
+             redirect('nilai');
+         }
+ 
++        // Jika halaman diakses biasa (GET), ambil data mahasiswa & matakuliah untuk pilihan dropdown form
+         $data['mahasiswa']  = $this->Siakad_model->get_all_mahasiswa();
+         $data['matakuliah'] = $this->Siakad_model->get_all_matakuliah();
+ 
++        // Tampilkan form tambah nilai
+         $this->load->view('nilai/tambah', $data);
+     }
+ 
+-    // Mengedit data nilai
++    /**
++     * Edit Data Nilai (Edit)
++     * Mengubah data nilai yang sudah ada, melakukan validasi duplikasi, & mencatat perubahannya ke log.
++     */
+     public function edit($id) {
++        // Ambil data nilai lama berdasarkan ID
+         $data['nilai'] = $this->Siakad_model->get_nilai_by_id($id);
+ 
++        // Jika data tidak ditemukan di database, kembalikan ke index
+         if (!$data['nilai']) {
+             $this->session->set_flashdata('error', 'Data nilai tidak ditemukan.');
+             redirect('nilai');
+         }
+ 
++        // Jika form disubmit (POST)
+         if ($this->input->post()) {
+-            $nilai_lama = $data['nilai'];
++            $nilai_lama = $data['nilai']; // Simpan salinan data lama untuk kebutuhan log audit
+ 
++            // Ambil data dari form input
+             $mahasiswa_id  = $this->input->post('mahasiswa_id', TRUE);
+             $matakuliah_id = $this->input->post('matakuliah_id', TRUE);
+             $nilai_angka   = $this->input->post('nilai_angka', TRUE);
+ 
+-            // Cek duplikasi dengan data lain
++            // Validasi: Cek duplikasi dengan data nilai lain di luar ID yang sedang diedit
+             $existing = $this->db->get_where('nilai', [
+                 'mahasiswa_id' => $mahasiswa_id,
+                 'matakuliah_id' => $matakuliah_id,
+@@ -110,9 +152,10 @@ class Nilai extends CI_Controller {
+                 redirect('nilai/edit/' . $id);
+             }
+ 
+-            // Hitung nilai huruf baru
++            // Hitung nilai huruf baru hasil perubahan
+             $nilai_huruf = $this->_hitung_nilai_huruf($nilai_angka);
+ 
++            // Siapkan array data yang akan diperbarui
+             $updateData = [
+                 'mahasiswa_id'  => $mahasiswa_id,
+                 'matakuliah_id' => $matakuliah_id,
+@@ -120,12 +163,14 @@ class Nilai extends CI_Controller {
+                 'nilai_huruf'   => $nilai_huruf
+             ];
+ 
++            // Proses pembaruan ke database melalui model
+             if ($this->Siakad_model->update_nilai($id, $updateData)) {
+ 
+-                // Catat log aktivitas admin
++                // Mengambil nama mahasiswa & matakuliah untuk log audit
+                 $mahasiswa = $this->Siakad_model->get_mahasiswa_by_id($mahasiswa_id);
+                 $matakuliah = $this->Siakad_model->get_matakuliah_by_id($matakuliah_id);
+ 
++                // AUDIT LOG: Catat perubahan data nilai dari yang lama ke yang baru
+                 $this->Auth_model->insert_nilai_log([
+                     'nilai_id'          => $id,
+                     'user_id'           => $this->session->userdata('user_id'),
+@@ -144,26 +189,35 @@ class Nilai extends CI_Controller {
+                 $this->session->set_flashdata('error', 'Gagal memperbarui data nilai.');
+             }
+ 
++            // Redirect ke list nilai
+             redirect('nilai');
+         }
+ 
++        // Ambil list mahasiswa & matakuliah untuk pilihan form edit dropdown
+         $data['mahasiswa']  = $this->Siakad_model->get_all_mahasiswa();
+         $data['matakuliah'] = $this->Siakad_model->get_all_matakuliah();
+ 
++        // Memuat form edit nilai
+         $this->load->view('nilai/edit', $data);
+     }
+ 
+-    // Menghapus data nilai
++    /**
++     * Hapus Data Nilai (Hapus)
++     * Menghapus data nilai berdasarkan ID dan mencatat riwayat penghapusannya ke tabel audit log.
++     */
+     public function hapus($id) {
++        // Ambil data nilai yang akan dihapus untuk dicatat datanya di log
+         $nilai = $this->Siakad_model->get_nilai_by_id($id);
+ 
++        // Hapus nilai dari database
+         if ($this->Siakad_model->delete_nilai($id)) {
+ 
+-            // Catat log aktivitas admin
++            // Jika data nilai ditemukan, catat riwayat penghapusan ke tabel log
+             if ($nilai) {
+                 $mahasiswa = $this->Siakad_model->get_mahasiswa_by_id($nilai['mahasiswa_id']);
+                 $matakuliah = $this->Siakad_model->get_matakuliah_by_id($nilai['matakuliah_id']);
+ 
++                // AUDIT LOG: Catat aksi penghapusan
+                 $this->Auth_model->insert_nilai_log([
+                     'nilai_id'          => $id,
+                     'user_id'           => $this->session->userdata('user_id'),
+@@ -183,23 +237,34 @@ class Nilai extends CI_Controller {
+             $this->session->set_flashdata('error', 'Gagal menghapus data.');
+         }
+ 
++        // Kembali ke list nilai
+         redirect('nilai');
+     }
+ 
+-    // Sinkronisasi nilai huruf di database agar mengikuti regulasi rumus terbaru
++    /**
++     * Sinkronisasi Nilai Huruf Masal (Sync)
++     * Berfungsi memperbarui otomatis seluruh nilai huruf mahasiswa jika ada perubahan regulasi batas nilai.
++     * Mengambil seluruh data nilai, menghitung ulang nilai hurufnya, lalu menyimpan perubahan jika berbeda.
++     */
+     public function sync() {
++        // Mengambil semua data nilai dari tabel nilai
+         $all_nilai = $this->db->get('nilai')->result_array();
+-        $updated_count = 0;
++        $updated_count = 0; // Penghitung jumlah data yang berubah
+ 
++        // Loop seluruh baris nilai
+         foreach ($all_nilai as $n) {
++            // Hitung nilai huruf baru dengan rumus konversi yang aktif saat ini
+             $nilai_huruf_baru = $this->_hitung_nilai_huruf($n['nilai_angka']);
+             
++            // Jika nilai huruf lama tidak sama dengan nilai huruf hasil hitungan baru
+             if ($n['nilai_huruf'] !== $nilai_huruf_baru) {
++                // Update nilai huruf di database
+                 $this->db->where('id', $n['id'])->update('nilai', ['nilai_huruf' => $nilai_huruf_baru]);
+                 $updated_count++;
+             }
+         }
+ 
++        // Memberikan umpan balik (feedback) sukses kepada admin
+         if ($updated_count > 0) {
+             $this->session->set_flashdata('success', 'Sinkronisasi berhasil! Sebanyak ' . $updated_count . ' data nilai telah diperbarui sesuai rumus terbaru.');
+         } else {
+@@ -208,7 +273,20 @@ class Nilai extends CI_Controller {
+         redirect('nilai');
+     }
+ 
+-    // Fungsi konversi nilai angka ke nilai huruf
++    /**
++     * Fungsi Helper Konversi Nilai Angka ke Huruf
++     * Mengkonversi nilai angka (0 - 100) menjadi nilai huruf (A, B, C, D, E) berdasarkan kriteria kelulusan akademik.
++     * 
++     * Kriteria Konversi Nilai Baru (Berdasarkan Kebijakan Kampus Terbaru):
++     * - Nilai >= 90 = A
++     * - Nilai >= 80 = B
++     * - Nilai >= 70 = C
++     * - Nilai >= 60 = D
++     * - Nilai < 60  = E
++     * 
++     * @param float $nilai_angka
++     * @return string $nilai_huruf
++     */
+     private function _hitung_nilai_huruf($nilai_angka) {
+         if ($nilai_angka >= 90) {
+             return 'A';
+diff --git a/application/controllers/Welcome.php b/application/controllers/Welcome.php
+index 97cd929..8e525d2 100644
+--- a/application/controllers/Welcome.php
++++ b/application/controllers/Welcome.php
+@@ -16,7 +16,41 @@ class Welcome extends CI_Controller {
+ 
+     public function index()
+     {
+-        // BACKEND: Hitung jumlah data dari masing-masing tabel
++        $role = $this->session->userdata('role');
++        if ($role === 'mahasiswa') {
++            $nim = $this->session->userdata('username');
++            $mhs = $this->Siakad_model->get_mahasiswa_by_nim($nim);
++            
++            if ($mhs) {
++                $mahasiswa_id = $mhs['id'];
++                
++                // Hitung IPK mahasiswa
++                $all_nilai = $this->db->select('nilai.nilai_huruf, matakuliah.sks')
++                                      ->from('nilai')
++                                      ->join('matakuliah', 'nilai.matakuliah_id = matakuliah.id')
++                                      ->where('nilai.mahasiswa_id', $mahasiswa_id)
++                                      ->get()->result_array();
++                
++                $total_bobot_sks_kumulatif = 0;
++                $total_sks_kumulatif = 0;
++                foreach ($all_nilai as $nilai_item) {
++                    $bobot = $this->_konversi_huruf_ke_bobot($nilai_item['nilai_huruf']);
++                    $sks = (int) $nilai_item['sks'];
++                    $total_bobot_sks_kumulatif += ($sks * $bobot);
++                    $total_sks_kumulatif += $sks;
++                }
++                
++                $data['ipk'] = ($total_sks_kumulatif > 0) ? number_format($total_bobot_sks_kumulatif / $total_sks_kumulatif, 2) : '0.00';
++                $data['total_sks_mhs'] = $total_sks_kumulatif;
++                $data['mahasiswa_data'] = $mhs;
++            } else {
++                $data['ipk'] = '0.00';
++                $data['total_sks_mhs'] = 0;
++                $data['mahasiswa_data'] = null;
++            }
++        }
++
++        // BACKEND: Hitung jumlah data dari masing-masing tabel (untuk admin/superadmin)
+         $data['total_mahasiswa']  = $this->db->count_all('mahasiswa');
+         $data['total_matakuliah'] = $this->db->count_all('matakuliah');
+         $data['total_nilai']      = $this->db->count_all('nilai');
+@@ -24,4 +58,17 @@ class Welcome extends CI_Controller {
+         // Mengirimkan statistik ke dashboard view
+         $this->load->view('dashboard', $data);
+     }
++
++    // Fungsi pembantu untuk konversi nilai huruf ke bobot angka
++    private function _konversi_huruf_ke_bobot($huruf) {
++        $huruf = strtoupper($huruf);
++        switch ($huruf) {
++            case 'A': return 4;
++            case 'B': return 3;
++            case 'C': return 2;
++            case 'D': return 1;
++            case 'E': return 0;
++            default: return 0;
++        }
++    }
+ }
+diff --git a/application/models/Auth_model.php b/application/models/Auth_model.php
+index 80844f1..9b4e384 100644
+--- a/application/models/Auth_model.php
++++ b/application/models/Auth_model.php
+@@ -157,6 +157,9 @@ class Auth_model extends CI_Model {
+      * Username: superadmin, Password: admin123
+      */
+     public function seed_superadmin() {
++        // Run ALTER TABLE to ensure 'mahasiswa' role exists in ENUM
++        $this->db->query("ALTER TABLE users MODIFY COLUMN role ENUM('superadmin', 'admin', 'mahasiswa') NOT NULL DEFAULT 'admin'");
++
+         $existing = $this->get_user_by_username('superadmin');
+         if (!$existing) {
+             $this->insert_user([
+@@ -171,5 +174,24 @@ class Auth_model extends CI_Model {
+                 'password' => password_hash('admin123', PASSWORD_BCRYPT)
+             ]);
+         }
++
++        // Add dummy mahasiswa logins to users table
++        $dummy_mhs = [
++            ['username' => '220101001', 'nama_lengkap' => 'Ahmad Dani'],
++            ['username' => '220101002', 'nama_lengkap' => 'Budi Santoso'],
++            ['username' => '220101003', 'nama_lengkap' => 'Citra Lestari']
++        ];
++
++        foreach ($dummy_mhs as $mhs) {
++            $existing_mhs = $this->get_user_by_username($mhs['username']);
++            if (!$existing_mhs) {
++                $this->insert_user([
++                    'username'      => $mhs['username'],
++                    'password'      => 'mahasiswa123', // Will be hashed in insert_user
++                    'nama_lengkap'  => $mhs['nama_lengkap'],
++                    'role'          => 'mahasiswa'
++                ]);
++            }
++        }
+     }
+ }
+diff --git a/application/models/Siakad_model.php b/application/models/Siakad_model.php
+index d188b58..01660b7 100644
+--- a/application/models/Siakad_model.php
++++ b/application/models/Siakad_model.php
+@@ -17,6 +17,11 @@ class Siakad_model extends CI_Model {
+         return $this->db->get_where('mahasiswa', ['id' => $id])->row_array();
+     }
+ 
++    // Mengambil data mahasiswa berdasarkan NIM
++    public function get_mahasiswa_by_nim($nim) {
++        return $this->db->get_where('mahasiswa', ['nim' => $nim])->row_array();
++    }
++
+     // Menambah data mahasiswa baru
+     public function insert_mahasiswa($data) {
+         return $this->db->insert('mahasiswa', $data);
+diff --git a/application/views/dashboard.php b/application/views/dashboard.php
+index 8caa47b..8a0faae 100644
+--- a/application/views/dashboard.php
++++ b/application/views/dashboard.php
+@@ -32,62 +32,118 @@
+ <!-- Content Row (Statistik Card) -->
+ <div class="row">
+ 
+-    <!-- Card: Total Mahasiswa -->
+-    <div class="col-xl-4 col-md-6 mb-4">
+-        <div class="card border-left-primary shadow h-100 py-2">
+-            <div class="card-body">
+-                <div class="row no-gutters align-items-center">
+-                    <div class="col mr-2">
+-                        <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">
+-                            Total Mahasiswa</div>
+-                        <!-- BACKEND: Menampilkan data statistik total_mahasiswa -->
+-                        <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo (int) $total_mahasiswa; ?> Orang</div>
++    <?php if ($this->session->userdata('role') === 'mahasiswa') : ?>
++        <!-- Card: IPK (GPA) -->
++        <div class="col-xl-4 col-md-6 mb-4">
++            <div class="card border-left-primary shadow h-100 py-2">
++                <div class="card-body">
++                    <div class="row no-gutters align-items-center">
++                        <div class="col mr-2">
++                            <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">
++                                IPK (Indeks Prestasi Kumulatif)</div>
++                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo $ipk; ?></div>
++                        </div>
++                        <div class="col-auto">
++                            <i class="fas fa-graduation-cap fa-2x text-gray-300"></i>
++                        </div>
+                     </div>
+-                    <div class="col-auto">
+-                        <i class="fas fa-users fa-2x text-gray-300"></i>
++                </div>
++            </div>
++        </div>
++
++        <!-- Card: Total SKS Lulus -->
++        <div class="col-xl-4 col-md-6 mb-4">
++            <div class="card border-left-success shadow h-100 py-2">
++                <div class="card-body">
++                    <div class="row no-gutters align-items-center">
++                        <div class="col mr-2">
++                            <div class="text-xs font-weight-bold text-success text-uppercase mb-1">
++                                Total SKS Diambil</div>
++                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo $total_sks_mhs; ?> SKS</div>
++                        </div>
++                        <div class="col-auto">
++                            <i class="fas fa-book fa-2x text-gray-300"></i>
++                        </div>
+                     </div>
+                 </div>
+             </div>
+         </div>
+-    </div>
+ 
+-    <!-- Card: Total Mata Kuliah -->
+-    <div class="col-xl-4 col-md-6 mb-4">
+-        <div class="card border-left-success shadow h-100 py-2">
+-            <div class="card-body">
+-                <div class="row no-gutters align-items-center">
+-                    <div class="col mr-2">
+-                        <div class="text-xs font-weight-bold text-success text-uppercase mb-1">
+-                            Total Mata Kuliah</div>
+-                        <!-- BACKEND: Menampilkan data statistik total_matakuliah -->
+-                        <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo (int) $total_matakuliah; ?> Matkul</div>
++        <!-- Card: Program Studi -->
++        <div class="col-xl-4 col-md-6 mb-4">
++            <div class="card border-left-info shadow h-100 py-2">
++                <div class="card-body">
++                    <div class="row no-gutters align-items-center">
++                        <div class="col mr-2">
++                            <div class="text-xs font-weight-bold text-info text-uppercase mb-1">
++                                Program Studi / Jurusan</div>
++                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo $mahasiswa_data ? htmlspecialchars($mahasiswa_data['jurusan']) : '-'; ?></div>
++                        </div>
++                        <div class="col-auto">
++                            <i class="fas fa-university fa-2x text-gray-300"></i>
++                        </div>
+                     </div>
+-                    <div class="col-auto">
+-                        <i class="fas fa-book fa-2x text-gray-300"></i>
++                </div>
++            </div>
++        </div>
++    <?php else : ?>
++        <!-- Card: Total Mahasiswa -->
++        <div class="col-xl-4 col-md-6 mb-4">
++            <div class="card border-left-primary shadow h-100 py-2">
++                <div class="card-body">
++                    <div class="row no-gutters align-items-center">
++                        <div class="col mr-2">
++                            <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">
++                                Total Mahasiswa</div>
++                            <!-- BACKEND: Menampilkan data statistik total_mahasiswa -->
++                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo (int) $total_mahasiswa; ?> Orang</div>
++                        </div>
++                        <div class="col-auto">
++                            <i class="fas fa-users fa-2x text-gray-300"></i>
++                        </div>
+                     </div>
+                 </div>
+             </div>
+         </div>
+-    </div>
+ 
+-    <!-- Card: Total Nilai Terinput -->
+-    <div class="col-xl-4 col-md-6 mb-4">
+-        <div class="card border-left-info shadow h-100 py-2">
+-            <div class="card-body">
+-                <div class="row no-gutters align-items-center">
+-                    <div class="col mr-2">
+-                        <div class="text-xs font-weight-bold text-info text-uppercase mb-1">
+-                            Nilai Terinput</div>
+-                        <!-- BACKEND: Menampilkan data statistik total_nilai -->
+-                        <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo (int) $total_nilai; ?> Entri</div>
++        <!-- Card: Total Mata Kuliah -->
++        <div class="col-xl-4 col-md-6 mb-4">
++            <div class="card border-left-success shadow h-100 py-2">
++                <div class="card-body">
++                    <div class="row no-gutters align-items-center">
++                        <div class="col mr-2">
++                            <div class="text-xs font-weight-bold text-success text-uppercase mb-1">
++                                Total Mata Kuliah</div>
++                            <!-- BACKEND: Menampilkan data statistik total_matakuliah -->
++                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo (int) $total_matakuliah; ?> Matkul</div>
++                        </div>
++                        <div class="col-auto">
++                            <i class="fas fa-book fa-2x text-gray-300"></i>
++                        </div>
+                     </div>
+-                    <div class="col-auto">
+-                        <i class="fas fa-graduation-cap fa-2x text-gray-300"></i>
++                </div>
++            </div>
++        </div>
++
++        <!-- Card: Total Nilai Terinput -->
++        <div class="col-xl-4 col-md-6 mb-4">
++            <div class="card border-left-info shadow h-100 py-2">
++                <div class="card-body">
++                    <div class="row no-gutters align-items-center">
++                        <div class="col mr-2">
++                            <div class="text-xs font-weight-bold text-info text-uppercase mb-1">
++                                Nilai Terinput</div>
++                            <!-- BACKEND: Menampilkan data statistik total_nilai -->
++                            <div class="h5 mb-0 font-weight-bold text-gray-800"><?php echo (int) $total_nilai; ?> Entri</div>
++                        </div>
++                        <div class="col-auto">
++                            <i class="fas fa-graduation-cap fa-2x text-gray-300"></i>
++                        </div>
+                     </div>
+                 </div>
+             </div>
+         </div>
+-    </div>
++    <?php endif; ?>
+ </div>
+ 
+ <!-- Welcome Content Row -->
+@@ -95,47 +151,64 @@
+     <div class="col-lg-12">
+         <div class="card shadow mb-4">
+             <div class="card-header py-3">
+-                <h6 class="m-0 font-weight-bold text-primary">Selamat Datang di SIAKAD KHS</h6>
++                <h6 class="m-0 font-weight-bold text-primary">
++                    <?php echo ($this->session->userdata('role') === 'mahasiswa') ? 'Informasi Akademik Mahasiswa' : 'Selamat Datang di SIAKAD KHS'; ?>
++                </h6>
+             </div>
+             <div class="card-body">
+-                <p>Sistem ini dirancang khusus untuk memenuhi kebutuhan pengelolaan data akademik kampus secara mudah dan cepat. Sistem mencakup fitur lengkap:</p>
+-                
+-                <div class="row my-4">
+-                    <div class="col-md-3 text-center mb-3">
+-                        <div class="p-3 bg-light rounded shadow-sm">
+-                            <i class="fas fa-user-plus fa-3x text-primary mb-2"></i>
+-                            <h5>Kelola Mahasiswa</h5>
+-                            <p class="small text-muted mb-3">Pendaftaran mahasiswa & upload foto profil resmi.</p>
+-                            <a href="<?php echo base_url('mahasiswa'); ?>" class="btn btn-sm btn-primary">Buka Modul</a>
++                <?php if ($this->session->userdata('role') === 'mahasiswa') : ?>
++                    <p>Halo <strong><?php echo htmlspecialchars($this->session->userdata('nama_lengkap')); ?></strong> (NIM: <?php echo htmlspecialchars($this->session->userdata('username')); ?>), selamat datang di portal akademik Anda. Di portal ini, Anda dapat memantau hasil belajar secara transparan.</p>
++                    
++                    <div class="row my-4 justify-content-center">
++                        <div class="col-md-5 text-center mb-3">
++                            <div class="p-4 bg-light rounded shadow-sm">
++                                <i class="fas fa-file-invoice-dollar fa-4x text-primary mb-3"></i>
++                                <h5>Lihat & Cetak KHS</h5>
++                                <p class="small text-muted mb-3">Periksa rincian nilai mata kuliah, SKS, IP Semester, IPK, dan unduh laporan KHS resmi Anda.</p>
++                                <a href="<?php echo base_url('khs'); ?>" class="btn btn-primary btn-block">
++                                    <i class="fas fa-print mr-1"></i> Buka KHS Saya
++                                </a>
++                            </div>
+                         </div>
+                     </div>
+-                    <div class="col-md-3 text-center mb-3">
+-                        <div class="p-3 bg-light rounded shadow-sm">
+-                            <i class="fas fa-book-open fa-3x text-success mb-2"></i>
+-                            <h5>Kelola Matkul</h5>
+-                            <p class="small text-muted mb-3">Manajemen data mata kuliah dan jumlah SKS.</p>
+-                            <a href="<?php echo base_url('matakuliah'); ?>" class="btn btn-sm btn-success">Buka Modul</a>
++                <?php else : ?>
++                    <p>Sistem ini dirancang khusus untuk memenuhi kebutuhan pengelolaan data akademik kampus secara mudah dan cepat. Sistem mencakup fitur lengkap:</p>
++                    
++                    <div class="row my-4">
++                        <div class="col-md-3 text-center mb-3">
++                            <div class="p-3 bg-light rounded shadow-sm">
++                                <i class="fas fa-user-plus fa-3x text-primary mb-2"></i>
++                                <h5>Kelola Mahasiswa</h5>
++                                <p class="small text-muted mb-3">Pendaftaran mahasiswa & upload foto profil resmi.</p>
++                                <a href="<?php echo base_url('mahasiswa'); ?>" class="btn btn-sm btn-primary">Buka Modul</a>
++                            </div>
+                         </div>
+-                    </div>
+-                    <div class="col-md-3 text-center mb-3">
+-                        <div class="p-3 bg-light rounded shadow-sm">
+-                            <i class="fas fa-pencil-alt fa-3x text-info mb-2"></i>
+-                            <h5>Input Nilai</h5>
+-                            <p class="small text-muted mb-3">Input nilai angka, konversi nilai huruf otomatis di backend.</p>
+-                            <a href="<?php echo base_url('nilai'); ?>" class="btn btn-sm btn-info">Buka Modul</a>
++                        <div class="col-md-3 text-center mb-3">
++                            <div class="p-3 bg-light rounded shadow-sm">
++                                <i class="fas fa-book-open fa-3x text-success mb-2"></i>
++                                <h5>Kelola Matkul</h5>
++                                <p class="small text-muted mb-3">Manajemen data mata kuliah dan jumlah SKS.</p>
++                                <a href="<?php echo base_url('matakuliah'); ?>" class="btn btn-sm btn-success">Buka Modul</a>
++                            </div>
+                         </div>
+-                    </div>
+-                    <div class="col-md-3 text-center mb-3">
+-                        <div class="p-3 bg-light rounded shadow-sm">
+-                            <i class="fas fa-file-pdf fa-3x text-warning mb-2"></i>
+-                            <h5>Cetak KHS PDF</h5>
+-                            <p class="small text-muted mb-3">Lihat rincian KHS per semester, hitung IP & cetak PDF.</p>
+-                            <a href="<?php echo base_url('khs'); ?>" class="btn btn-sm btn-warning">Buka Laporan</a>
++                        <div class="col-md-3 text-center mb-3">
++                            <div class="p-3 bg-light rounded shadow-sm">
++                                <i class="fas fa-pencil-alt fa-3x text-info mb-2"></i>
++                                <h5>Input Nilai</h5>
++                                <p class="small text-muted mb-3">Input nilai angka, konversi nilai huruf otomatis di backend.</p>
++                                <a href="<?php echo base_url('nilai'); ?>" class="btn btn-sm btn-info">Buka Modul</a>
++                            </div>
++                        </div>
++                        <div class="col-md-3 text-center mb-3">
++                            <div class="p-3 bg-light rounded shadow-sm">
++                                <i class="fas fa-file-pdf fa-3x text-warning mb-2"></i>
++                                <h5>Cetak KHS PDF</h5>
++                                <p class="small text-muted mb-3">Lihat rincian KHS per semester, hitung IP & cetak PDF.</p>
++                                <a href="<?php echo base_url('khs'); ?>" class="btn btn-sm btn-warning">Buka Laporan</a>
++                            </div>
+                         </div>
+                     </div>
+-                </div>
+-
+-                
++                <?php endif; ?>
+             </div>
+         </div>
+     </div>
+diff --git a/application/views/khs/cetak.php b/application/views/khs/cetak.php
+index f2bd763..0ddb5b0 100644
+--- a/application/views/khs/cetak.php
++++ b/application/views/khs/cetak.php
+@@ -46,6 +46,74 @@
+                 page-break-inside: avoid;
+             }
+         }
++
++        /* Judul KHS */
++        .khs-title {
++            text-align: center;
++            font-size: 16pt;
++            font-weight: bold;
++            text-decoration: underline;
++            margin-bottom: 25px;
++            letter-spacing: 1px;
++        }
++
++        /* Informasi Mahasiswa */
++        .student-info {
++            width: 100%;
++            margin-bottom: 25px;
++            font-size: 11pt;
++            line-height: 1.6;
++        }
++        .student-info td {
++            padding: 4px 0;
++            vertical-align: top;
++        }
++        .student-info td:first-child {
++            width: 22%;
++        }
++        .student-info td:nth-child(2) {
++            width: 3%;
++        }
++
++        /* Tabel Nilai */
++        .table-nilai {
++            width: 100%;
++            border-collapse: collapse;
++            margin-bottom: 30px;
++            font-size: 11pt;
++        }
++        .table-nilai th, .table-nilai td {
++            border: 1px solid #000;
++            padding: 8px 10px;
++        }
++        .table-nilai th {
++            background-color: #f2f2f2;
++            text-align: center;
++            font-weight: bold;
++        }
++        .table-nilai td:nth-child(1),
++        .table-nilai td:nth-child(2),
++        .table-nilai td:nth-child(4),
++        .table-nilai td:nth-child(5),
++        .table-nilai td:nth-child(6),
++        .table-nilai th {
++            text-align: center;
++        }
++
++        /* Tanda Tangan */
++        .signature-area {
++            width: 100%;
++            margin-top: 40px;
++            font-size: 11pt;
++        }
++        .signature-area td {
++            width: 50%;
++            text-align: center;
++            vertical-align: top;
++        }
++        .space-sig {
++            height: 85px;
++        }
+     </style>
+ </head>
+ 
+@@ -114,32 +182,7 @@
+                     <?php echo htmlspecialchars($mahasiswa['nama']); ?>
+                 </td>
+ 
+-                <!-- Foto Mahasiswa -->
+-                <td rowspan="4">
+-
+-                    <?php
+-
+-                    // Menentukan lokasi file foto
+-                    $fotoPath = './uploads/mahasiswa/' . $mahasiswa['foto'];
+ 
+-                    // Jika foto ada gunakan foto mahasiswa
+-                    // Jika tidak gunakan foto default
+-                    $fotoUrl =
+-                        (file_exists($fotoPath) && !empty($mahasiswa['foto']))
+-                        ? base_url('uploads/mahasiswa/' . $mahasiswa['foto'])
+-                        : base_url('assets/start/img/undraw_profile.svg');
+-
+-                    ?>
+-
+-                    <!-- Menampilkan foto mahasiswa -->
+-                    <img src="<?php echo $fotoUrl; ?>"
+-                        alt="Foto Mahasiswa"
+-                        class="student-foto"
+-
+-                        <!-- Jika foto error -->
+-                        onerror="this.src='<?php echo base_url('assets/start/img/undraw_profile.svg'); ?>'">
+-
+-                </td>
+             </tr>
+ 
+             <tr>
+diff --git a/application/views/khs/detail.php b/application/views/khs/detail.php
+index 944672d..bd1cde9 100644
+--- a/application/views/khs/detail.php
++++ b/application/views/khs/detail.php
+@@ -6,12 +6,35 @@
+ <div class="d-sm-flex align-items-center justify-content-between mb-4">
+     <h1 class="h3 mb-0 text-gray-800">Detail Kartu Hasil Studi (KHS)</h1>
+ 
+-    <!-- Tombol kembali ke halaman daftar KHS -->
+-    <a href="<?php echo base_url('khs'); ?>" class="btn btn-sm btn-secondary shadow-sm">
+-        <i class="fas fa-arrow-left fa-sm text-white-50"></i> Kembali
+-    </a>
++    <!-- Tombol kembali -->
++    <?php if ($this->session->userdata('role') === 'mahasiswa') : ?>
++        <a href="<?php echo base_url('welcome'); ?>" class="btn btn-sm btn-secondary shadow-sm">
++            <i class="fas fa-arrow-left fa-sm text-white-50"></i> Kembali ke Dashboard
++        </a>
++    <?php else : ?>
++        <a href="<?php echo base_url('khs'); ?>" class="btn btn-sm btn-secondary shadow-sm">
++            <i class="fas fa-arrow-left fa-sm text-white-50"></i> Kembali
++        </a>
++    <?php endif; ?>
+ </div>
+ 
++<!-- Alert Notifikasi -->
++<?php if ($this->session->flashdata('success')) : ?>
++    <div class="alert alert-success alert-dismissible fade show" role="alert">
++        <i class="fas fa-check-circle mr-2"></i>
++        <?php echo $this->session->flashdata('success'); ?>
++        <button type="button" class="close" data-dismiss="alert"><span>&times;</span></button>
++    </div>
++<?php endif; ?>
++
++<?php if ($this->session->flashdata('error')) : ?>
++    <div class="alert alert-danger alert-dismissible fade show" role="alert">
++        <i class="fas fa-exclamation-circle mr-2"></i>
++        <?php echo $this->session->flashdata('error'); ?>
++        <button type="button" class="close" data-dismiss="alert"><span>&times;</span></button>
++    </div>
++<?php endif; ?>
++
+ <div class="row">
+ 
+     <!-- ========================= -->
+@@ -40,13 +63,11 @@
+                     : base_url('assets/start/img/undraw_profile.svg');
+                 ?>
+ 
+-                <!-- Menampilkan foto mahasiswa -->
++                <!-- Menampilkan foto mahasiswa (jika gagal dimuat, tampilkan foto default) -->
+                 <img src="<?php echo $fotoUrl; ?>"
+                      alt="Foto"
+                      class="img-thumbnail rounded-circle mb-3"
+                      style="width:150px;height:150px;object-fit:cover;"
+-
+-                     <!-- Jika gambar gagal dimuat tampilkan foto default -->
+                      onerror="this.src='<?php echo base_url('assets/start/img/undraw_profile.svg'); ?>'">
+ 
+                 <!-- Nama mahasiswa -->
+@@ -63,6 +84,19 @@
+                 <p class="text-muted small">
+                     <?php echo htmlspecialchars($mahasiswa['jurusan']); ?>
+                 </p>
++
++                <?php if ($this->session->userdata('role') === 'mahasiswa') : ?>
++                    <hr>
++                    <form action="<?php echo base_url('khs/upload_foto'); ?>" method="POST" enctype="multipart/form-data" class="mt-2 text-left">
++                        <div class="form-group mb-2">
++                            <label for="fotoInput" class="small font-weight-bold text-muted d-block">Ubah Foto Profil</label>
++                            <input type="file" name="foto" id="fotoInput" class="form-control-file form-control-sm" accept="image/*" required style="font-size: 0.8rem;">
++                        </div>
++                        <button type="submit" class="btn btn-sm btn-primary btn-block">
++                            <i class="fas fa-upload mr-1"></i> Unggah Foto
++                        </button>
++                    </form>
++                <?php endif; ?>
+             </div>
+         </div>
+     </div>
+diff --git a/application/views/khs/index.php b/application/views/khs/index.php
+index a17a438..2c70c13 100644
+--- a/application/views/khs/index.php
++++ b/application/views/khs/index.php
+@@ -60,12 +60,10 @@
+                                             : base_url('assets/start/img/undraw_profile.svg');
+                                     ?>
+ 
+-                                    <!-- Menampilkan foto mahasiswa -->
++                                    <!-- Menampilkan foto mahasiswa (Jika gambar error gunakan foto default) -->
+                                     <img src="<?php echo $fotoUrl; ?>"
+                                          alt="Foto"
+                                          class="mahasiswa-foto"
+-
+-                                         <!-- Jika gambar error gunakan foto default -->
+                                          onerror="this.src='<?php echo base_url('assets/start/img/undraw_profile.svg'); ?>'">
+ 
+                                 </td>
+diff --git a/application/views/login.php b/application/views/login.php
+index e4f828c..76995a9 100644
+--- a/application/views/login.php
++++ b/application/views/login.php
+@@ -182,7 +182,7 @@
+ 
+                 <div class="text-center mt-3">
+                     <small style="color: rgba(255,255,255,0.5);">
+-                        &copy; <?php echo date('Y'); ?> ZODIAK GROUP — SIAKAD KHS
++                        &copy; <?php echo date('Y'); ?>  GROUP — SIAKAD KHS
+                     </small>
+                 </div>
+             </div>
+diff --git a/application/views/mahasiswa/edit.php b/application/views/mahasiswa/edit.php
+index 38ac03a..410ee3c 100644
+--- a/application/views/mahasiswa/edit.php
++++ b/application/views/mahasiswa/edit.php
+@@ -56,6 +56,12 @@
+                         <small class="form-text text-muted">Biarkan kosong jika tidak ingin mengubah foto profil. Format: JPG, PNG. Maksimal 2MB.</small>
+                     </div>
+ 
++                    <div class="form-group">
++                        <label for="password" class="font-weight-bold">Password Login Baru (Opsional)</label>
++                        <input type="password" class="form-control" id="password" name="password" placeholder="Masukkan password baru untuk login mahasiswa" minlength="4">
++                        <small class="form-text text-muted">Biarkan kosong jika tidak ingin mengubah password akun login mahasiswa.</small>
++                    </div>
++
+                     <hr>
+ 
+                     <button type="submit" class="btn btn-primary">
+diff --git a/application/views/mahasiswa/tambah.php b/application/views/mahasiswa/tambah.php
+index 7fa9305..cf36d7a 100644
+--- a/application/views/mahasiswa/tambah.php
++++ b/application/views/mahasiswa/tambah.php
+@@ -46,6 +46,12 @@
+                         <small class="form-text text-muted">Format file yang diperbolehkan: JPG, JPEG, PNG, GIF. Maksimal 2MB.</small>
+                     </div>
+ 
++                    <div class="form-group">
++                        <label for="password" class="font-weight-bold">Password Login (Opsional)</label>
++                        <input type="password" class="form-control" id="password" name="password" placeholder="Password untuk akun login mahasiswa" minlength="4">
++                        <small class="form-text text-muted">Biarkan kosong jika ingin menggunakan password default: <strong>mahasiswa123</strong>.</small>
++                    </div>
++
+                     <hr>
+ 
+                     <button type="submit" class="btn btn-primary">
+diff --git a/application/views/nilai/edit.php b/application/views/nilai/edit.php
+index 93542df..058afcf 100644
+--- a/application/views/nilai/edit.php
++++ b/application/views/nilai/edit.php
+@@ -1,6 +1,7 @@
+ <?php $this->load->view('templates/header'); ?>
++<!-- Memanggil file header template untuk memuat sidebar, navbar, dan style dasar -->
+ 
+-<!-- Page Heading -->
++<!-- Judul Halaman Form Edit Nilai -->
+ <div class="d-sm-flex align-items-center justify-content-between mb-4">
+     <h1 class="h3 mb-0 text-gray-800">Edit Nilai Akhir</h1>
+     <a href="<?php echo base_url('nilai'); ?>" class="btn btn-sm btn-secondary shadow-sm">
+@@ -8,16 +9,7 @@
+     </a>
+ </div>
+ 
+-<!-- Alert Notifikasi Flashdata dari Backend -->
+-<?php if ($this->session->flashdata('success')) : ?>
+-    <div class="alert alert-success alert-dismissible fade show" role="alert">
+-        <strong>Sukses!</strong> <?php echo $this->session->flashdata('success'); ?>
+-        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+-            <span aria-hidden="true">&times;</span>
+-        </button>
+-    </div>
+-<?php endif; ?>
+-
++<!-- Alert Notifikasi Flashdata dari Backend jika ada pesan error -->
+ <?php if ($this->session->flashdata('error')) : ?>
+     <div class="alert alert-danger alert-dismissible fade show" role="alert">
+         <strong>Error!</strong> <?php echo $this->session->flashdata('error'); ?>
+@@ -34,12 +26,12 @@
+                 <h6 class="m-0 font-weight-bold text-primary">Formulir Edit Nilai Mahasiswa</h6>
+             </div>
+             <div class="card-body">
+-                <!-- Form disubmit ke method /nilai/edit/{id} menggunakan POST -->
++                <!-- FORM OPEN: Membuka tag form dan mensubmit data ke method /nilai/edit/{id} via metode POST -->
+                 <?php echo form_open('nilai/edit/' . $nilai['id']); ?>
+                 
++                    <!-- Input 1: Pilihan Mahasiswa (Terkunci ke mahasiswa aktif yang diedit nilainya) -->
+                     <div class="form-group">
+                         <label for="mahasiswa_id" class="font-weight-bold">Pilih Mahasiswa</label>
+-                        <!-- Pilihan list mahasiswa dengan yang terpilih sebelumnya -->
+                         <select class="form-control" id="mahasiswa_id" name="mahasiswa_id" required>
+                             <?php foreach ($mahasiswa as $mhs) : ?>
+                                 <option value="<?php echo $mhs['id']; ?>" <?php echo ($mhs['id'] == $nilai['mahasiswa_id']) ? 'selected' : ''; ?>>
+@@ -48,30 +40,49 @@
+                             <?php endforeach; ?>
+                         </select>
+                     </div>
+- 
++
++                    <!-- Input 2: Filter Semester (Baru)
++                         Berfungsi untuk menyaring mata kuliah berdasarkan semester pada halaman edit.
++                         Akan disesuaikan secara otomatis saat pertama kali halaman dimuat berdasarkan semester mata kuliah aktif. -->
++                    <div class="form-group">
++                        <label for="filter_semester" class="font-weight-bold">Filter Semester Mata Kuliah</label>
++                        <select class="form-control" id="filter_semester">
++                            <option value="">-- Semua Semester --</option>
++                            <option value="1">Semester 1</option>
++                            <option value="2">Semester 2</option>
++                            <option value="3">Semester 3</option>
++                            <option value="4">Semester 4</option>
++                            <option value="5">Semester 5</option>
++                            <option value="6">Semester 6</option>
++                            <option value="7">Semester 7</option>
++                            <option value="8">Semester 8</option>
++                        </select>
++                    </div>
++
++                    <!-- Input 3: Pilihan Mata Kuliah (Mengatur mata kuliah terpilih sebelumnya) -->
+                     <div class="form-group">
+                         <label for="matakuliah_id" class="font-weight-bold">Pilih Mata Kuliah</label>
+-                        <!-- Pilihan list matakuliah dengan yang terpilih sebelumnya -->
+                         <select class="form-control" id="matakuliah_id" name="matakuliah_id" required>
+                             <?php foreach ($matakuliah as $mk) : ?>
+-                                <option value="<?php echo $mk['id']; ?>" <?php echo ($mk['id'] == $nilai['matakuliah_id']) ? 'selected' : ''; ?>>
+-                                    <?php echo htmlspecialchars($mk['nama_mk']); ?> (<?php echo htmlspecialchars($mk['kode_mk']); ?> - <?php echo (int) $mk['sks']; ?> SKS)
++                                <option value="<?php echo $mk['id']; ?>" data-semester="<?php echo (int) $mk['semester']; ?>" <?php echo ($mk['id'] == $nilai['matakuliah_id']) ? 'selected' : ''; ?>>
++                                    <?php echo htmlspecialchars($mk['nama_mk']); ?> (<?php echo htmlspecialchars($mk['kode_mk']); ?> - <?php echo (int) $mk['sks']; ?> SKS - Semester <?php echo (int) $mk['semester']; ?>)
+                                 </option>
+                             <?php endforeach; ?>
+                         </select>
+                     </div>
+  
++                    <!-- Input 4: Nilai Angka (Menampilkan nilai angka yang sudah diinput sebelumnya untuk diedit) -->
+                     <div class="form-group">
+                         <label for="nilai_angka" class="font-weight-bold">Nilai Angka (Skala 0 - 100)</label>
+-                        <!-- Menampilkan nilai angka lama -->
+                         <input type="number" class="form-control" id="nilai_angka" name="nilai_angka" min="0" max="100" step="0.01" value="<?php echo (float) $nilai['nilai_angka']; ?>" required>
+                         <small class="form-text text-muted">
+-                            Konversi nilai huruf otomatis diperbarui oleh backend setelah Anda klik simpan.
++                            Konversi nilai huruf otomatis diperbarui oleh backend setelah Anda klik simpan perubahan.
+                         </small>
+                     </div>
+ 
+                     <hr>
+ 
++                    <!-- Tombol Aksi Simpan & Batal -->
+                     <button type="submit" class="btn btn-primary">
+                         <i class="fas fa-save"></i> Simpan Perubahan
+                     </button>
+@@ -83,4 +94,63 @@
+     </div>
+ </div>
+ 
++<!-- JAVASCRIPT: Logika Interaktif Filter Semester pada Halaman Edit
++     Fungsi Tambahan:
++     - Mendeteksi semester mata kuliah yang sedang aktif terpilih ketika halaman pertama kali dimuat (onload).
++     - Menyetel nilai awal dropdown filter_semester ke semester mata kuliah aktif tersebut, lalu memicu penyaringan opsi. -->
++<script>
++document.addEventListener('DOMContentLoaded', function() {
++    const filterSemester = document.getElementById('filter_semester');
++    const matakuliahSelect = document.getElementById('matakuliah_id');
++    
++    // Menyimpan salinan opsi asli untuk referensi filter
++    const originalOptions = Array.from(matakuliahSelect.options);
++
++    // Fungsi Filter: Menyaring dan merender ulang opsi mata kuliah
++    function filterCourses(selectedSem) {
++        const currentSelection = matakuliahSelect.value; // Simpan mata kuliah terpilih saat ini
++        matakuliahSelect.innerHTML = ''; // Kosongkan dropdown
++        
++        originalOptions.forEach(option => {
++            if (option.value === '') {
++                matakuliahSelect.appendChild(option.cloneNode(true));
++            } else {
++                const sem = option.getAttribute('data-semester');
++                if (selectedSem === '' || sem === selectedSem) {
++                    matakuliahSelect.appendChild(option.cloneNode(true));
++                }
++            }
++        });
++        
++        // Kembalikan mata kuliah terpilih agar tidak ter-reset
++        matakuliahSelect.value = currentSelection;
++    }
++
++    // ON LOAD INITIALIZATION: Mengeset filter awal berdasarkan mata kuliah terpilih saat ini
++    const selectedOption = matakuliahSelect.options[matakuliahSelect.selectedIndex];
++    if (selectedOption) {
++        const initialSem = selectedOption.getAttribute('data-semester');
++        if (initialSem) {
++            filterSemester.value = initialSem; // Set dropdown filter ke semester mata kuliah aktif
++            filterCourses(initialSem); // Jalankan penyaringan agar hanya menampilkan mata kuliah se-semester tersebut
++        }
++    }
++
++    // Event listener mendeteksi perubahan filter semester oleh admin
++    filterSemester.addEventListener('change', function() {
++        filterCourses(this.value);
++        
++        // Reset pilihan mata kuliah ke default jika mata kuliah yang aktif terpilih tidak sesuai dengan semester yang baru difilter
++        const checkOption = matakuliahSelect.options[matakuliahSelect.selectedIndex];
++        if (checkOption && checkOption.value !== '') {
++            const sem = checkOption.getAttribute('data-semester');
++            if (this.value !== '' && sem !== this.value) {
++                matakuliahSelect.value = '';
++            }
++        }
++    });
++});
++</script>
++
++<!-- Memanggil footer template untuk menutup tag HTML -->
+ <?php $this->load->view('templates/footer'); ?>
+diff --git a/application/views/nilai/index.php b/application/views/nilai/index.php
+index fa1d8a9..a67dbf0 100644
+--- a/application/views/nilai/index.php
++++ b/application/views/nilai/index.php
+@@ -1,20 +1,23 @@
+ <?php $this->load->view('templates/header'); ?>
++<!-- Memanggil file header template untuk menampilkan sidebar dan navbar atas -->
+ 
+-<!-- Page Heading -->
++<!-- Page Heading: Bagian judul halaman utama manajemen nilai -->
+ <div class="d-sm-flex align-items-center justify-content-between mb-4">
+     <h1 class="h3 mb-0 text-gray-800">Manajemen Nilai Akhir</h1>
+     <div>
++        <!-- Tombol Sinkronkan Nilai: Mengarah ke route /nilai/sync untuk update massal seluruh nilai huruf -->
+         <a href="<?php echo base_url('nilai/sync'); ?>" class="d-none d-sm-inline-block btn btn-sm btn-success shadow-sm mr-2" 
+            onclick="return confirm('Apakah Anda yakin ingin menyinkronkan ulang seluruh nilai huruf mahasiswa berdasarkan regulasi terbaru?')">
+             <i class="fas fa-sync-alt fa-sm text-white-50"></i> Sinkronkan Nilai
+         </a>
++        <!-- Tombol Input Nilai Baru: Membuka formulir tambah nilai mahasiswa -->
+         <a href="<?php echo base_url('nilai/tambah'); ?>" class="d-none d-sm-inline-block btn btn-sm btn-primary shadow-sm">
+             <i class="fas fa-plus fa-sm text-white-50"></i> Input Nilai Baru
+         </a>
+     </div>
+ </div>
+ 
+-<!-- Alert Notifikasi Flashdata dari Backend -->
++<!-- Alert Notifikasi Flashdata: Menampilkan pesan sukses dari server setelah operasi CRUD/Sinkronisasi -->
+ <?php if ($this->session->flashdata('success')) : ?>
+     <div class="alert alert-success alert-dismissible fade show" role="alert">
+         <strong>Sukses!</strong> <?php echo $this->session->flashdata('success'); ?>
+@@ -24,6 +27,7 @@
+     </div>
+ <?php endif; ?>
+ 
++<!-- Alert Notifikasi Flashdata: Menampilkan pesan kesalahan dari server jika operasi gagal -->
+ <?php if ($this->session->flashdata('error')) : ?>
+     <div class="alert alert-danger alert-dismissible fade show" role="alert">
+         <strong>Error!</strong> <?php echo $this->session->flashdata('error'); ?>
+@@ -33,13 +37,14 @@
+     </div>
+ <?php endif; ?>
+ 
+-<!-- DataTales Example -->
++<!-- Card Container Utama: Memuat tabel data nilai -->
+ <div class="card shadow mb-4">
+     <div class="card-header py-3">
+         <h6 class="m-0 font-weight-bold text-primary">Daftar Nilai Akhir Mahasiswa</h6>
+     </div>
+     <div class="card-body">
+         <div class="table-responsive">
++            <!-- Tabel Data: Menggunakan class dataTable untuk fitur pencarian, filter, dan pagination otomatis -->
+             <table class="table table-bordered" id="dataTable" width="100%" cellspacing="0">
+                 <thead>
+                     <tr>
+@@ -53,36 +58,49 @@
+                     </tr>
+                 </thead>
+                 <tbody>
+-                    <!-- Looping data nilai -->
++                    <!-- BACKEND: Mengecek apakah variabel array $nilai dari controller berisi data -->
+                     <?php if (!empty($nilai)) : ?>
++                        <!-- Loop untuk menampilkan data nilai satu per satu -->
+                         <?php $no = 1; foreach ($nilai as $nl) : ?>
+                             <tr>
++                                <!-- Nomor urut baris -->
+                                 <td><?php echo $no++; ?></td>
++                                
++                                <!-- Kolom Identitas Mahasiswa -->
+                                 <td>
+                                     <strong><?php echo htmlspecialchars($nl['nama_mahasiswa']); ?></strong><br>
+                                     <small class="text-muted"><?php echo htmlspecialchars($nl['nim']); ?></small>
+                                 </td>
++                                
++                                <!-- Kolom Mata Kuliah yang Diambil -->
+                                 <td>
+                                     <strong><?php echo htmlspecialchars($nl['nama_mk']); ?></strong><br>
+                                     <small class="badge badge-secondary"><?php echo htmlspecialchars($nl['kode_mk']); ?></small>
+                                 </td>
++                                
++                                <!-- Jumlah SKS -->
+                                 <td><?php echo (int) $nl['sks']; ?> SKS</td>
++                                
++                                <!-- Nilai Angka hasil input -->
+                                 <td><?php echo (float) $nl['nilai_angka']; ?></td>
++                                
++                                <!-- Nilai Huruf yang dikonversi sistem -->
+                                 <td>
+-                                    <!-- Warnai badge huruf sesuai dengan nilainya -->
++                                    <!-- Logika penentuan warna badge nilai huruf untuk presentasi estetika yang dinamis -->
+                                     <?php 
+-                                        $badgeClass = 'badge-danger';
+-                                        if ($nl['nilai_huruf'] == 'A') $badgeClass = 'badge-success';
+-                                        elseif ($nl['nilai_huruf'] == 'B') $badgeClass = 'badge-primary';
+-                                        elseif ($nl['nilai_huruf'] == 'C') $badgeClass = 'badge-info';
+-                                        elseif ($nl['nilai_huruf'] == 'D') $badgeClass = 'badge-warning';
++                                        $badgeClass = 'badge-danger'; // Default merah untuk nilai rendah (D, E)
++                                        if ($nl['nilai_huruf'] == 'A') $badgeClass = 'badge-success'; // Hijau untuk A
++                                        elseif ($nl['nilai_huruf'] == 'B') $badgeClass = 'badge-primary'; // Biru untuk B
++                                        elseif ($nl['nilai_huruf'] == 'C') $badgeClass = 'badge-info'; // Cyan untuk C
++                                        elseif ($nl['nilai_huruf'] == 'D') $badgeClass = 'badge-warning'; // Kuning/Oranye untuk D
+                                     ?>
+                                     <span class="badge <?php echo $badgeClass; ?> px-3 py-2 font-weight-bold" style="font-size: 0.9rem;">
+                                         <?php echo htmlspecialchars($nl['nilai_huruf']); ?>
+                                     </span>
+                                 </td>
++                                
++                                <!-- Tombol Aksi Edit: Mengarah ke halaman edit nilai berdasarkan ID data nilai -->
+                                 <td>
+-                                    <!-- Link ke Edit -->
+                                     <a href="<?php echo base_url('nilai/edit/' . $nl['id']); ?>" class="btn btn-warning btn-sm">
+                                         <i class="fas fa-edit"></i> Edit
+                                     </a>
+@@ -90,6 +108,7 @@
+                             </tr>
+                         <?php endforeach; ?>
+                     <?php else : ?>
++                        <!-- Tampilan jika tabel database nilai masih kosong -->
+                         <tr>
+                             <td colspan="7" class="text-center">Belum ada data nilai yang diinput.</td>
+                         </tr>
+@@ -100,4 +119,5 @@
+     </div>
+ </div>
+ 
++<!-- Memanggil footer template untuk menutup tag HTML dan load library JavaScript (JS) SB Admin 2 -->
+ <?php $this->load->view('templates/footer'); ?>
+diff --git a/application/views/nilai/tambah.php b/application/views/nilai/tambah.php
+index 0a461de..6aee8b9 100644
+--- a/application/views/nilai/tambah.php
++++ b/application/views/nilai/tambah.php
+@@ -1,6 +1,7 @@
+ <?php $this->load->view('templates/header'); ?>
++<!-- Memanggil file header template untuk memuat sidebar, navbar, dan style dasar -->
+ 
+-<!-- Page Heading -->
++<!-- Judul Halaman Form Input Nilai -->
+ <div class="d-sm-flex align-items-center justify-content-between mb-4">
+     <h1 class="h3 mb-0 text-gray-800">Input Nilai Akhir</h1>
+     <a href="<?php echo base_url('nilai'); ?>" class="btn btn-sm btn-secondary shadow-sm">
+@@ -8,17 +9,8 @@
+     </a>
+ </div>
+ 
+-<!-- Alert Notifikasi Flashdata dari Backend -->
+-<?php if ($this->session->flashdata('success')) : ?>
+-    <div class="alert alert-success alert-dismissible fade show" role="alert">
+-        <strong>Sukses!</strong> <?php echo $this->session->flashdata('success'); ?>
+-        <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+-            <span aria-hidden="true">&times;</span>
+-        </button>
+-    </div>
+-<?php endif; ?>
+-
+-<?php if ($this->session->flashdata('error')) : ?>
++<!-- Alert Notifikasi Flashdata dari Backend jika ada pesan error -->
++<?php if ($this->session->flashdata('error')): ?>
+     <div class="alert alert-danger alert-dismissible fade show" role="alert">
+         <strong>Error!</strong> <?php echo $this->session->flashdata('error'); ?>
+         <button type="button" class="close" data-dismiss="alert" aria-label="Close">
+@@ -34,50 +26,78 @@
+                 <h6 class="m-0 font-weight-bold text-primary">Formulir Input Nilai Mahasiswa</h6>
+             </div>
+             <div class="card-body">
+-                <!-- Form disubmit ke method /nilai/tambah menggunakan POST -->
++                <!-- FORM OPEN: Membuka tag form dan mensubmit data ke method /nilai/tambah via metode POST -->
+                 <?php echo form_open('nilai/tambah'); ?>
+-                
+-                    <div class="form-group">
+-                        <label for="mahasiswa_id" class="font-weight-bold">Pilih Mahasiswa</label>
+-                        <!--  Pilihan list mahasiswa yang diambil dari Database -->
+-                        <select class="form-control" id="mahasiswa_id" name="mahasiswa_id" required>
+-                            <option value="">-- Pilih Mahasiswa --</option>
+-                            <?php foreach ($mahasiswa as $mhs) : ?>
+-                                <option value="<?php echo $mhs['id']; ?>">
+-                                    <?php echo htmlspecialchars($mhs['nama']); ?> (NIM: <?php echo htmlspecialchars($mhs['nim']); ?>)
+-                                </option>
+-                            <?php endforeach; ?>
+-                        </select>
+-                    </div>
+-
+-                    <div class="form-group">
+-                        <label for="matakuliah_id" class="font-weight-bold">Pilih Mata Kuliah</label>
+-                        <!--  Pilihan list mata kuliah yang diambil dari database -->
+-                        <select class="form-control" id="matakuliah_id" name="matakuliah_id" required>
+-                            <option value="">-- Pilih Mata Kuliah --</option>
+-                            <?php foreach ($matakuliah as $mk) : ?>
+-                                <option value="<?php echo $mk['id']; ?>">
+-                                    <?php echo htmlspecialchars($mk['nama_mk']); ?> (<?php echo htmlspecialchars($mk['kode_mk']); ?> - <?php echo (int) $mk['sks']; ?> SKS)
+-                                </option>
+-                            <?php endforeach; ?>
+-                        </select>
+-                    </div>
+-
+-                    <div class="form-group">
+-                        <label for="nilai_angka" class="font-weight-bold">Nilai Angka (Skala 0 - 100)</label>
+-                        <input type="number" class="form-control" id="nilai_angka" name="nilai_angka" min="0" max="100" step="0.01" placeholder="Contoh: 82.5" required>
+-                        <small class="form-text text-muted">
+-                            Nilai huruf otomatis dikalkulasikan <br>
+-                            &ge; 85 = <strong>A</strong> | &ge; 80 = <strong>B</strong> | &ge; 70 = <strong>C</strong> | &ge; 50 = <strong>D</strong> | &lt; 50 = <strong>E</strong>
+-                        </small>
+-                    </div>
+-
+-                    <hr>
+-
+-                    <button type="submit" class="btn btn-primary">
+-                        <i class="fas fa-save"></i> Simpan Nilai
+-                    </button>
+-                    <a href="<?php echo base_url('nilai'); ?>" class="btn btn-light">Batal</a>
++
++                <!-- Input 1: Pilihan Mahasiswa -->
++                <div class="form-group">
++                    <label for="mahasiswa_id" class="font-weight-bold">Pilih Mahasiswa</label>
++                    <select class="form-control" id="mahasiswa_id" name="mahasiswa_id" required>
++                        <option value="">-- Pilih Mahasiswa --</option>
++                        <!-- LOOPING MAHASISWA: Diambil dari controller untuk mengisi daftar mahasiswa -->
++                        <?php foreach ($mahasiswa as $mhs): ?>
++                            <option value="<?php echo $mhs['id']; ?>">
++                                <?php echo htmlspecialchars($mhs['nama']); ?> (NIM:
++                                <?php echo htmlspecialchars($mhs['nim']); ?>)
++                            </option>
++                        <?php endforeach; ?>
++                    </select>
++                </div>
++
++                <!-- Input 2: Filter Semester (Baru)
++                         Fitur ini digunakan oleh admin untuk mempersempit pilihan mata kuliah berdasarkan semester.
++                         Membantu mempermudah pengelompokan pengisian nilai secara teratur. -->
++                <div class="form-group">
++                    <label for="filter_semester" class="font-weight-bold">Filter Semester Mata Kuliah</label>
++                    <select class="form-control" id="filter_semester">
++                        <option value="">-- Semua Semester --</option>
++                        <option value="1">Semester 1</option>
++                        <option value="2">Semester 2</option>
++                        <option value="3">Semester 3</option>
++                        <option value="4">Semester 4</option>
++                        <option value="5">Semester 5</option>
++                        <option value="6">Semester 6</option>
++                        <option value="7">Semester 7</option>
++                        <option value="8">Semester 8</option>
++                    </select>
++                </div>
++
++                <!-- Input 3: Pilihan Mata Kuliah
++                         Dropdown ini memiliki atribut khusus data-semester pada setiap opsi.
++                         Atribut ini akan dibaca oleh JavaScript di bawah untuk menyaring mata kuliah yang tampil. -->
++                <div class="form-group">
++                    <label for="matakuliah_id" class="font-weight-bold">Pilih Mata Kuliah</label>
++                    <select class="form-control" id="matakuliah_id" name="matakuliah_id" required>
++                        <option value="">-- Pilih Mata Kuliah --</option>
++                        <?php foreach ($matakuliah as $mk): ?>
++                            <option value="<?php echo $mk['id']; ?>" data-semester="<?php echo (int) $mk['semester']; ?>">
++                                <?php echo htmlspecialchars($mk['nama_mk']); ?>
++                                (<?php echo htmlspecialchars($mk['kode_mk']); ?> - <?php echo (int) $mk['sks']; ?> SKS -
++                                Semester <?php echo (int) $mk['semester']; ?>)
++                            </option>
++                        <?php endforeach; ?>
++                    </select>
++                </div>
++
++                <!-- Input 4: Nilai Angka (Skala 0 - 100) -->
++                <div class="form-group">
++                    <label for="nilai_angka" class="font-weight-bold">Nilai Angka (Skala 0 - 100)</label>
++                    <input type="number" class="form-control" id="nilai_angka" name="nilai_angka" min="0" max="100"
++                        step="0.01" placeholder="Contoh: 82.5" required>
++                    <small class="form-text text-muted">
++                        Nilai huruf otomatis dikalkulasikan oleh sistem backend saat data disimpan:<br>
++                        &ge; 90 = <strong>A</strong> | &ge; 80 = <strong>B</strong> | &ge; 70 = <strong>C</strong> |
++                        &ge; 60 = <strong>D</strong> | &lt; 60 = <strong>E</strong>
++                    </small>
++                </div>
++
++                <hr>
++
++                <!-- Tombol Aksi Simpan & Batal -->
++                <button type="submit" class="btn btn-primary">
++                    <i class="fas fa-save"></i> Simpan Nilai
++                </button>
++                <a href="<?php echo base_url('nilai'); ?>" class="btn btn-light">Batal</a>
+ 
+                 <?php echo form_close(); ?>
+             </div>
+@@ -85,4 +105,48 @@
+     </div>
+ </div>
+ 
+-<?php $this->load->view('templates/footer'); ?>
++<!-- JAVASCRIPT: Logika Interaktif Filter Mata Kuliah Berdasarkan Semester
++     Fungsi ini berjalan di sisi client (browser) tanpa reload halaman.
++     Cara Kerja:
++     1. Menangkap event perubahan (change) pada dropdown filter_semester.
++     2. Menghapus semua opsi mata kuliah dari dropdown matakuliah_id.
++     3. Menyaring kembali opsi asli berdasarkan atribut "data-semester" yang cocok dengan pilihan admin.
++     4. Memasukkan kembali opsi-opsi yang lolos filter ke dalam dropdown matakuliah_id. -->
++<script>
++    document.addEventListener('DOMContentLoaded', function () {
++        const filterSemester = document.getElementById('filter_semester');
++        const matakuliahSelect = document.getElementById('matakuliah_id');
++
++        // Menyimpan salinan semua opsi asli mata kuliah untuk referensi filter
++        const originalOptions = Array.from(matakuliahSelect.options);
++
++        // Event listener mendeteksi perubahan pilihan semester oleh admin
++        filterSemester.addEventListener('change', function () {
++            const selectedSem = this.value; // Nilai semester yang dipilih
++
++            // Membersihkan seluruh opsi mata kuliah yang ada di dropdown saat ini
++            matakuliahSelect.innerHTML = '';
++
++            // Loop seluruh opsi mata kuliah asli untuk difilter
++            originalOptions.forEach(option => {
++                if (option.value === '') {
++                    // Selalu tampilkan opsi default "-- Pilih Mata Kuliah --"
++                    matakuliahSelect.appendChild(option.cloneNode(true));
++                } else {
++                    // Ambil atribut semester mata kuliah dari option tag
++                    const sem = option.getAttribute('data-semester');
++                    // Jika pilihan semester kosong (semua semester) atau semester cocok dengan filter
++                    if (selectedSem === '' || sem === selectedSem) {
++                        matakuliahSelect.appendChild(option.cloneNode(true));
++                    }
++                }
++            });
++
++            // Reset pilihan aktif mata kuliah ke pilihan default setelah semester diubah
++            matakuliahSelect.value = '';
++        });
++    });
++</script>
++
++<!-- Memanggil footer template untuk menutup tag HTML -->
++<?php $this->load->view('templates/footer'); ?>
+\ No newline at end of file
+diff --git a/application/views/templates/header.php b/application/views/templates/header.php
+index 4375713..e87f14f 100644
+--- a/application/views/templates/header.php
++++ b/application/views/templates/header.php
+@@ -56,6 +56,7 @@
+             </li>
+ 
+             <!-- Divider -->
++            <?php if ($this->session->userdata('role') !== 'mahasiswa') : ?>
+             <hr class="sidebar-divider">
+ 
+             <!-- Heading -->
+@@ -86,6 +87,7 @@
+                     <span>Data Nilai Akhir</span>
+                 </a>
+             </li>
++            <?php endif; ?>
+ 
+             <!-- Divider -->
+             <hr class="sidebar-divider">
+@@ -99,17 +101,19 @@
+             <li class="nav-item">
+                 <a class="nav-link" href="<?php echo base_url('khs'); ?>">
+                     <i class="fas fa-fw fa-print"></i>
+-                    <span>Cetak KHS</span>
++                    <span><?php echo ($this->session->userdata('role') === 'mahasiswa') ? 'Lihat & Cetak KHS' : 'Cetak KHS'; ?></span>
+                 </a>
+             </li>
+ 
+             <!-- Nav Item - Audit Log (History Nilai) -->
++            <?php if ($this->session->userdata('role') !== 'mahasiswa') : ?>
+             <li class="nav-item">
+                 <a class="nav-link" href="<?php echo base_url('auditlog'); ?>">
+                     <i class="fas fa-fw fa-history"></i>
+                     <span>History Nilai</span>
+                 </a>
+             </li>
++            <?php endif; ?>
+ 
+             <!-- Divider (Superadmin Only) -->
+             <?php if ($this->session->userdata('role') === 'superadmin') : ?>
+diff --git a/db_siakad.sql b/db_siakad.sql
+index 5c0c563..33dbef0 100644
+--- a/db_siakad.sql
++++ b/db_siakad.sql
+@@ -2,7 +2,10 @@
+ -- AKUN LOGIN :
+ --   Username : superadmin
+ --   Password : admin123
+---
++
++-- akun login mahasiswa:
++--   Username : 220101001
++--   Password : mahasiswa123
+ 
+ 
+ CREATE DATABASE IF NOT EXISTS db_Siakad;
+@@ -49,7 +52,7 @@ CREATE TABLE IF NOT EXISTS users (
+     username VARCHAR(50) UNIQUE NOT NULL,
+     password VARCHAR(255) NOT NULL,
+     nama_lengkap VARCHAR(100) NOT NULL,
+-    role ENUM('superadmin', 'admin') NOT NULL DEFAULT 'admin',
++    role ENUM('superadmin', 'admin', 'mahasiswa') NOT NULL DEFAULT 'admin',
+     is_active TINYINT(1) NOT NULL DEFAULT 1,
+     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+@@ -75,12 +78,15 @@ CREATE TABLE IF NOT EXISTS nilai_log (
+ ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+ 
+ 
+--- DATA AWAL: Akun SuperAdmin Default
++-- Akun SuperAdmin
+ -- Username: superadmin | Password: admin123
+--- (Password di-hash menggunakan bcrypt)
++
+ 
+ INSERT IGNORE INTO users (id, username, password, nama_lengkap, role) VALUES
+-(1, 'superadmin', '$2y$10$LxOnkW3lsTd4mJ.AR3TVJuOMQsgPMjMoxUZBaZu2A.My6.jDAq/QW', 'Super Administrator', 'superadmin');
++(1, 'superadmin', '$2y$10$LxOnkW3lsTd4mJ.AR3TVJuOMQsgPMjMoxUZBaZu2A.My6.jDAq/QW', 'Super Administrator', 'superadmin'),
++(2, '220101001', '$2y$10$q.KPgdMMhYMcD8hp/yFHsuruDARuVvi1eRRncxKBz3Tt3tn2dY7Te', 'Ahmad Dani', 'mahasiswa'),
++(3, '220101002', '$2y$10$q.KPgdMMhYMcD8hp/yFHsuruDARuVvi1eRRncxKBz3Tt3tn2dY7Te', 'Budi Santoso', 'mahasiswa'),
++(4, '220101003', '$2y$10$q.KPgdMMhYMcD8hp/yFHsuruDARuVvi1eRRncxKBz3Tt3tn2dY7Te', 'Citra Lestari', 'mahasiswa');
+ 
+ 
+ -- DATA AWAL: Dummy Data Mahasiswa
