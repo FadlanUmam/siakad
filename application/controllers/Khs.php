@@ -1,28 +1,28 @@
 <?php
 defined('BASEPATH') OR exit('No direct script access allowed');
 
-// Controller KHS Kartu Hasil Studi
+// Controller untuk mengelola Kartu Hasil Studi (KHS)
 class Khs extends CI_Controller {
 
-    // Constructor dijalankan otomatis saat controller dipanggil
     public function __construct() {
         parent::__construct();
 
-        // Memuat model Siakad_model agar bisa mengakses database
+        // Load model utama untuk akses database
         $this->load->model('Siakad_model');
 
-        // Proteksi halaman, hanya user yang sudah login yang bisa mengakses
+        // Redirect ke login jika belum terautentikasi
         if (!$this->session->userdata('is_logged_in')) {
             redirect('login');
         }
     }
 
-    // Menampilkan daftar mahasiswa yang dapat dipilih untuk melihat KHS
+    // Halaman daftar mahasiswa (admin/dosen)
+    // Mahasiswa otomatis diarahkan ke KHS miliknya sendiri
     public function index() {
-        // Mahasiswa langsung diarahkan ke detail KHS-nya sendiri
         if ($this->session->userdata('role') === 'mahasiswa') {
             $nim = $this->session->userdata('username');
             $mhs = $this->Siakad_model->get_mahasiswa_by_nim($nim);
+
             if ($mhs) {
                 redirect('khs/detail/' . $mhs['id']);
             } else {
@@ -31,16 +31,14 @@ class Khs extends CI_Controller {
             }
         }
 
-        // Mengambil seluruh data mahasiswa dari model
+        // Kirim seluruh data mahasiswa ke view
         $data['mahasiswa'] = $this->Siakad_model->get_all_mahasiswa();
-
-        // Menampilkan view daftar mahasiswa
         $this->load->view('khs/index', $data);
     }
 
-    // Menampilkan detail KHS berdasarkan mahasiswa yang dipilih
+    // Menampilkan detail KHS per semester untuk mahasiswa tertentu
     public function detail($mahasiswa_id) {
-        // Proteksi agar mahasiswa tidak bisa melihat KHS orang lain
+        // Mahasiswa hanya boleh mengakses KHS miliknya sendiri
         if ($this->session->userdata('role') === 'mahasiswa') {
             $nim = $this->session->userdata('username');
             $mhs = $this->Siakad_model->get_mahasiswa_by_nim($nim);
@@ -50,145 +48,90 @@ class Khs extends CI_Controller {
             }
         }
 
-        // Mengambil data mahasiswa berdasarkan ID
+        // Ambil data mahasiswa, redirect jika tidak ditemukan
         $data['mahasiswa'] = $this->Siakad_model->get_mahasiswa_by_id($mahasiswa_id);
-
-        // Jika mahasiswa tidak ditemukan
         if (!$data['mahasiswa']) {
-
-            // Menampilkan pesan error
             $this->session->set_flashdata('error', 'Mahasiswa tidak ditemukan.');
-
-            // Kembali ke halaman daftar KHS
             redirect('khs');
         }
 
-        // Mengambil daftar semester yang pernah diambil mahasiswa
+        // Ambil daftar semester yang pernah ditempuh mahasiswa
         $data['list_semester'] = $this->Siakad_model->get_semesters_by_mahasiswa($mahasiswa_id);
 
-        // Mengambil semester yang dipilih dari URL (?semester=...)
+        // Gunakan semester dari query string, atau default ke semester pertama
         $selected_semester = $this->input->get('semester', TRUE);
-
-        // Jika tidak ada semester yang dipilih,
-        // otomatis menggunakan semester pertama
         if (empty($selected_semester) && !empty($data['list_semester'])) {
             $selected_semester = $data['list_semester'][0]['semester'];
         }
 
-        // Mengirim semester terpilih ke view
         $data['selected_semester'] = $selected_semester;
 
-        // Nilai awal
-        $data['khs_list'] = [];
-        $data['ip'] = 0.00;
+        // Nilai default sebelum data dihitung
+        $data['khs_list']  = [];
+        $data['ip']        = '0.00';
         $data['total_sks'] = 0;
 
-        // Jika semester tersedia
         if (!empty($selected_semester)) {
-
-            // Mengambil data nilai KHS mahasiswa pada semester tertentu
-            $khs_raw = $this->Siakad_model->get_khs_mahasiswa(
-                $mahasiswa_id,
-                $selected_semester
-            );
-
-            // Variabel untuk menghitung IP Semester
+            // Ambil data nilai KHS pada semester yang dipilih
+            $khs_raw       = $this->Siakad_model->get_khs_mahasiswa($mahasiswa_id, $selected_semester);
             $total_bobot_sks = 0;
-            $total_sks = 0;
-            $processed_khs = [];
+            $total_sks       = 0;
+            $processed_khs   = [];
 
-            // Loop setiap mata kuliah
             foreach ($khs_raw as $item) {
+                $bobot              = $this->_konversi_huruf_ke_bobot($item['nilai_huruf']);
+                $sks                = (int) $item['sks'];
+                $item['bobot']      = $bobot;
+                $item['nilai_mutu'] = $sks * $bobot;
 
-                // Konversi nilai huruf menjadi bobot angka
-                $bobot = $this->_konversi_huruf_ke_bobot($item['nilai_huruf']);
-
-                // Ambil jumlah SKS
-                $sks = (int) $item['sks'];
-
-                // Hitung nilai mutu
-                $nilai_mutu = $sks * $bobot;
-
-                // Tambahkan data ke array
-                $item['bobot'] = $bobot;
-                $item['nilai_mutu'] = $nilai_mutu;
-
-                // Akumulasi total nilai mutu
-                $total_bobot_sks += $nilai_mutu;
-
-                // Akumulasi total SKS
-                $total_sks += $sks;
-
-                // Simpan data yang sudah diproses
-                $processed_khs[] = $item;
+                $total_bobot_sks += $item['nilai_mutu'];
+                $total_sks       += $sks;
+                $processed_khs[]  = $item;
             }
 
-            // Kirim data KHS ke view
-            $data['khs_list'] = $processed_khs;
+            $data['khs_list']  = $processed_khs;
             $data['total_sks'] = $total_sks;
 
-            // Menghitung IP Semester
+            // Hitung IP Semester = total nilai mutu / total SKS
             if ($total_sks > 0) {
-                $data['ip'] = number_format(
-                    $total_bobot_sks / $total_sks,
-                    2
-                );
+                $data['ip'] = number_format($total_bobot_sks / $total_sks, 2);
             } else {
                 $data['ip'] = '0.00';
             }
         }
 
-        // ==========================
-        // PERHITUNGAN IPK KUMULATIF
-        // ==========================
-
-        // Mengambil semua nilai mahasiswa dari seluruh semester
+        // Hitung IPK kumulatif dari seluruh semester yang sudah ditempuh
         $all_nilai = $this->db->select('nilai.nilai_huruf, matakuliah.sks')
                               ->from('nilai')
                               ->join('matakuliah', 'nilai.matakuliah_id = matakuliah.id')
                               ->where('nilai.mahasiswa_id', $mahasiswa_id)
                               ->get()->result_array();
 
-        // Variabel perhitungan IPK
         $total_bobot_sks_kumulatif = 0;
-        $total_sks_kumulatif = 0;
+        $total_sks_kumulatif       = 0;
 
-        // Loop seluruh nilai mahasiswa
         foreach ($all_nilai as $nilai_item) {
-
-            // Konversi huruf ke bobot
-            $bobot = $this->_konversi_huruf_ke_bobot(
-                $nilai_item['nilai_huruf']
-            );
-
-            // Ambil jumlah SKS
-            $sks = (int) $nilai_item['sks'];
-
-            // Akumulasi nilai mutu
-            $total_bobot_sks_kumulatif += ($sks * $bobot);
-
-            // Akumulasi SKS
-            $total_sks_kumulatif += $sks;
+            $bobot                      = $this->_konversi_huruf_ke_bobot($nilai_item['nilai_huruf']);
+            $sks                        = (int) $nilai_item['sks'];
+            $total_bobot_sks_kumulatif += $sks * $bobot;
+            $total_sks_kumulatif       += $sks;
         }
 
-        // Total SKS keseluruhan
         $data['total_sks_kumulatif'] = $total_sks_kumulatif;
 
-        // Menghitung IPK
-        $data['ipk'] = ($total_sks_kumulatif > 0)
-            ? number_format(
-                $total_bobot_sks_kumulatif / $total_sks_kumulatif,
-                2
-              )
-            : '0.00';
+        // IPK = total nilai mutu semua semester / total SKS semua semester
+        if ($total_sks_kumulatif > 0) {
+            $data['ipk'] = number_format($total_bobot_sks_kumulatif / $total_sks_kumulatif, 2);
+        } else {
+            $data['ipk'] = '0.00';
+        }
 
-        // Menampilkan halaman detail KHS
         $this->load->view('khs/detail', $data);
     }
 
-    // Menampilkan halaman cetak KHS (print friendly)
+    // Menampilkan halaman cetak KHS (tampilan print-friendly)
     public function cetak($mahasiswa_id, $semester) {
-        // Proteksi agar mahasiswa tidak bisa mencetak KHS orang lain
+        // Mahasiswa hanya boleh mencetak KHS miliknya sendiri
         if ($this->session->userdata('role') === 'mahasiswa') {
             $nim = $this->session->userdata('username');
             $mhs = $this->Siakad_model->get_mahasiswa_by_nim($nim);
@@ -198,58 +141,42 @@ class Khs extends CI_Controller {
             }
         }
 
-        // Mengambil data mahasiswa
+        // Tampilkan 404 jika data mahasiswa tidak ditemukan
         $data['mahasiswa'] = $this->Siakad_model->get_mahasiswa_by_id($mahasiswa_id);
-
-        // Jika mahasiswa tidak ditemukan tampilkan 404
         if (!$data['mahasiswa']) {
             show_404();
         }
 
-        // Menyimpan semester yang dipilih
         $data['selected_semester'] = $semester;
 
-        // Mengambil data nilai semester
-        $khs_raw = $this->Siakad_model->get_khs_mahasiswa(
-            $mahasiswa_id,
-            $semester
-        );
-
-        // Perhitungan IP Semester
+        // Ambil dan proses nilai KHS semester yang dicetak
+        $khs_raw         = $this->Siakad_model->get_khs_mahasiswa($mahasiswa_id, $semester);
         $total_bobot_sks = 0;
-        $total_sks = 0;
-        $processed_khs = [];
+        $total_sks       = 0;
+        $processed_khs   = [];
 
         foreach ($khs_raw as $item) {
+            $bobot              = $this->_konversi_huruf_ke_bobot($item['nilai_huruf']);
+            $sks                = (int) $item['sks'];
+            $item['bobot']      = $bobot;
+            $item['nilai_mutu'] = $sks * $bobot;
 
-            $bobot = $this->_konversi_huruf_ke_bobot($item['nilai_huruf']);
-            $sks = (int) $item['sks'];
-            $nilai_mutu = $sks * $bobot;
-
-            $item['bobot'] = $bobot;
-            $item['nilai_mutu'] = $nilai_mutu;
-
-            $total_bobot_sks += $nilai_mutu;
-            $total_sks += $sks;
-
-            $processed_khs[] = $item;
+            $total_bobot_sks += $item['nilai_mutu'];
+            $total_sks       += $sks;
+            $processed_khs[]  = $item;
         }
 
-        // Data untuk view cetak
-        $data['khs_list'] = $processed_khs;
+        $data['khs_list']  = $processed_khs;
         $data['total_sks'] = $total_sks;
 
-        // Menghitung IP Semester
+        // Hitung IP Semester
         if ($total_sks > 0) {
-            $data['ip'] = number_format(
-                $total_bobot_sks / $total_sks,
-                2
-            );
+            $data['ip'] = number_format($total_bobot_sks / $total_sks, 2);
         } else {
             $data['ip'] = '0.00';
         }
 
-        // Menghitung IPK kumulatif
+        // Hitung IPK kumulatif untuk ditampilkan di halaman cetak
         $all_nilai = $this->db->select('nilai.nilai_huruf, matakuliah.sks')
                               ->from('nilai')
                               ->join('matakuliah', 'nilai.matakuliah_id = matakuliah.id')
@@ -257,27 +184,30 @@ class Khs extends CI_Controller {
                               ->get()->result_array();
 
         $total_bobot_sks_kumulatif = 0;
-        $total_sks_kumulatif = 0;
+        $total_sks_kumulatif       = 0;
 
         foreach ($all_nilai as $nilai_item) {
-            $bobot = $this->_konversi_huruf_ke_bobot($nilai_item['nilai_huruf']);
-            $sks = (int) $nilai_item['sks'];
-            $total_bobot_sks_kumulatif += ($sks * $bobot);
-            $total_sks_kumulatif += $sks;
+            $bobot                      = $this->_konversi_huruf_ke_bobot($nilai_item['nilai_huruf']);
+            $sks                        = (int) $nilai_item['sks'];
+            $total_bobot_sks_kumulatif += $sks * $bobot;
+            $total_sks_kumulatif       += $sks;
         }
 
         $data['total_sks_kumulatif'] = $total_sks_kumulatif;
-        $data['ipk'] = ($total_sks_kumulatif > 0)
-            ? number_format($total_bobot_sks_kumulatif / $total_sks_kumulatif, 2)
-            : '0.00';
 
-        // Menampilkan halaman cetak
+        // Hitung IPK
+        if ($total_sks_kumulatif > 0) {
+            $data['ipk'] = number_format($total_bobot_sks_kumulatif / $total_sks_kumulatif, 2);
+        } else {
+            $data['ipk'] = '0.00';
+        }
+
         $this->load->view('khs/cetak', $data);
     }
 
-    // Memperbarui foto profil mahasiswa (khusus mahasiswa login)
+    // Menangani upload dan pembaruan foto profil mahasiswa
     public function upload_foto() {
-        // Hanya boleh diakses oleh role mahasiswa
+        // Fitur ini hanya untuk role mahasiswa
         if ($this->session->userdata('role') !== 'mahasiswa') {
             $this->session->set_flashdata('error', 'Akses ditolak!');
             redirect('welcome');
@@ -292,12 +222,13 @@ class Khs extends CI_Controller {
         }
 
         if (!empty($_FILES['foto']['name'])) {
+            // Konfigurasi upload: tipe file, ukuran maksimal, dan nama file
             $config['upload_path']   = './uploads/mahasiswa/';
             $config['allowed_types'] = 'gif|jpg|png|jpeg';
-            $config['max_size']      = 2048; // Max 2MB
+            $config['max_size']      = 2048; // 2MB
             $config['file_name']     = 'mhs_' . $mhs['nim'] . '_' . time();
 
-            // Pastikan folder upload ada
+            // Buat folder upload jika belum ada
             if (!is_dir($config['upload_path'])) {
                 mkdir($config['upload_path'], 0777, TRUE);
             }
@@ -310,12 +241,9 @@ class Khs extends CI_Controller {
                     unlink('./uploads/mahasiswa/' . $mhs['foto']);
                 }
 
+                // Simpan nama file baru ke database
                 $uploadData = $this->upload->data();
-                $newFoto = $uploadData['file_name'];
-
-                // Update database
-                $this->Siakad_model->update_mahasiswa($mhs['id'], ['foto' => $newFoto]);
-
+                $this->Siakad_model->update_mahasiswa($mhs['id'], ['foto' => $uploadData['file_name']]);
                 $this->session->set_flashdata('success', 'Foto profil berhasil diperbarui.');
             } else {
                 $this->session->set_flashdata('error', $this->upload->display_errors());
@@ -327,31 +255,14 @@ class Khs extends CI_Controller {
         redirect('khs/detail/' . $mhs['id']);
     }
 
-    // Fungsi private untuk mengubah nilai huruf menjadi bobot
+    // Mengubah nilai huruf menjadi bobot angka untuk perhitungan IP/IPK
     private function _konversi_huruf_ke_bobot($huruf) {
-
-        // Mengubah huruf menjadi kapital
-        $huruf = strtoupper($huruf);
-
-        switch ($huruf) {
-
-            // Nilai A = 4
+        switch (strtoupper($huruf)) {
             case 'A': return 4;
-
-            // Nilai B = 3
             case 'B': return 3;
-
-            // Nilai C = 2
             case 'C': return 2;
-
-            // Nilai D = 1
             case 'D': return 1;
-
-            // Nilai E = 0
-            case 'E': return 0;
-
-            // Selain itu dianggap 0
-            default: return 0;
+            default:  return 0; // Nilai E atau tidak valid
         }
     }
-} 
+}
